@@ -34,9 +34,8 @@ void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_val *key_val = yyjson_arr_get_first(args);
     if (stack && yyjson_mut_arr_size(stack) > 0 && key_val && yyjson_is_str(key_val)) {
         const char *key = yyjson_get_str(key_val);
-        yyjson_mut_val *value = yyjson_mut_arr_get_last(stack);
+        yyjson_mut_val *value = yyjson_mut_arr_remove_last(stack);
         if (value) {
-            // yyjson_mut_obj_add_val moves the value from its old parent (stack)
             yyjson_mut_obj_add_val(doc, root, key, value);
         }
     }
@@ -62,14 +61,14 @@ void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
         yyjson_mut_val *val1_mut = yyjson_mut_arr_remove_last(stack);
         yyjson_mut_val *val2_mut = yyjson_mut_arr_remove_last(stack);
         
-        double val1 = yyjson_mut_get_real(val1_mut);
-        double val2 = yyjson_mut_get_real(val2_mut);
+        double val1 = val1_mut ? yyjson_mut_get_real(val1_mut) : 0;
+        double val2 = val2_mut ? yyjson_mut_get_real(val2_mut) : 0;
         
         yyjson_mut_arr_add_real(doc, stack, val1 + val2);
 
-        // Orphaned values must be freed to prevent memory leaks.
-        if (val1_mut) yyjson_mut_val_free(val1_mut);
-        if (val2_mut) yyjson_mut_val_free(val2_mut);
+        // The memory for val1_mut and val2_mut is managed by the doc's pool
+        // allocator and will be freed when yyjson_mut_doc_free() is called.
+        // There's no public API to free individual mutable values.
     }
 }
 
@@ -90,8 +89,7 @@ void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
         yyjson_mut_val *val_mut = yyjson_mut_arr_remove_last(stack);
         if (val_mut) {
             stack_val = yyjson_mut_get_real(val_mut);
-            // Orphaned value must be freed to prevent memory leaks.
-            yyjson_mut_val_free(val_mut);
+            // The memory for val_mut is managed by the doc's pool allocator.
         }
     }
     
