@@ -65,10 +65,6 @@ void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
         double val2 = val2_mut ? yyjson_mut_get_real(val2_mut) : 0;
         
         yyjson_mut_arr_add_real(doc, stack, val1 + val2);
-
-        // The memory for val1_mut and val2_mut is managed by the doc's pool
-        // allocator and will be freed when yyjson_mut_doc_free() is called.
-        // There's no public API to free individual mutable values.
     }
 }
 
