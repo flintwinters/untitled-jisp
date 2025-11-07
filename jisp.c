@@ -32,11 +32,12 @@ void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     yyjson_val *key_val = yyjson_arr_get_first(args);
-    if (stack && key_val && yyjson_is_str(key_val)) {
+    if (stack && yyjson_mut_arr_size(stack) > 0 && key_val && yyjson_is_str(key_val)) {
         const char *key = yyjson_get_str(key_val);
-        yyjson_mut_val *value = yyjson_mut_arr_pop_back(stack);
+        yyjson_mut_val *value = yyjson_mut_arr_get_last(stack);
         if (value) {
-            yyjson_mut_obj_add_val(root, key, value);
+            // yyjson_mut_obj_add_val moves the value from its old parent (stack)
+            yyjson_mut_obj_add_val(doc, root, key, value);
         }
     }
 }
@@ -48,7 +49,7 @@ void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
     if (stack) {
         yyjson_mut_val *top_value = yyjson_mut_arr_get_last(stack);
         if (top_value) {
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, top_value));
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, yyjson_mut_val_get_val(top_value)));
         }
     }
 }
@@ -58,8 +59,10 @@ void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (stack && yyjson_mut_arr_size(stack) >= 2) {
-        yyjson_mut_val *val1_mut = yyjson_mut_arr_pop_back(stack);
-        yyjson_mut_val *val2_mut = yyjson_mut_arr_pop_back(stack);
+        yyjson_mut_val *val1_mut = yyjson_mut_arr_get_last(stack);
+        yyjson_mut_arr_remove_last(stack);
+        yyjson_mut_val *val2_mut = yyjson_mut_arr_get_last(stack);
+        yyjson_mut_arr_remove_last(stack);
         
         double val1 = yyjson_mut_get_real(val1_mut);
         double val2 = yyjson_mut_get_real(val2_mut);
@@ -82,7 +85,9 @@ void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     double stack_val = 0;
     if (stack && yyjson_mut_arr_size(stack) > 0) {
-        stack_val = yyjson_mut_get_real(yyjson_mut_arr_pop_back(stack));
+        yyjson_mut_val *val_mut = yyjson_mut_arr_get_last(stack);
+        stack_val = yyjson_mut_get_real(val_mut);
+        yyjson_mut_arr_remove_last(stack);
     }
     
     double final_result = temp_sum + temp_mult + stack_val;
@@ -127,7 +132,7 @@ int main(void) {
     yyjson_mut_doc_set_root(doc, root);
     
     yyjson_mut_val *stack = yyjson_mut_arr(doc);
-    yyjson_mut_obj_add_val(root, "stack", stack);
+    yyjson_mut_obj_add_val(doc, root, "stack", stack);
     yyjson_mut_obj_add_int(doc, root, "temp_sum", 0);
     yyjson_mut_obj_add_int(doc, root, "temp_mult", 0);
     yyjson_mut_obj_add_int(doc, root, "final_result", 0);
