@@ -49,7 +49,7 @@ void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
     if (stack) {
         yyjson_mut_val *top_value = yyjson_mut_arr_get_last(stack);
         if (top_value) {
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, yyjson_mut_val_get_val(top_value)));
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)top_value));
         }
     }
 }
