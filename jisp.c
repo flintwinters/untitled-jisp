@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <assert.h>
 #include "yyjson.h"
 
 // Forward declarations
@@ -200,6 +201,26 @@ int main(void) {
     yyjson_mut_obj_add_int(doc, root, "temp_sum", 0);
     yyjson_mut_obj_add_int(doc, root, "temp_mult", 0);
     yyjson_mut_obj_add_int(doc, root, "final_result", 0);
+
+    // Tests for jpm_doc_retain and jpm_doc_release
+    {
+        yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+        yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+        // Initially, no "ref" field should be present
+        assert(ref_val == NULL);
+
+        // Retain twice should create and increment "ref" to 2
+        jpm_doc_retain(doc);
+        jpm_doc_retain(doc);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert(ref_val != NULL);
+        assert((int64_t)yyjson_mut_get_real(ref_val) == 2);
+
+        // Release once should decrement "ref" to 1 (document must not be freed)
+        jpm_doc_release(doc);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_real(ref_val) == 1);
+    }
 
     // add_block
     const jisp_instruction add_block[] = {
