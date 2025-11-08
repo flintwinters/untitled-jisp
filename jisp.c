@@ -162,10 +162,10 @@ void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
 void print_json(yyjson_mut_doc *doc, yyjson_val *args) {
     (void)args; // unused
     yyjson_write_err err;
-    const char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, &err);
+    char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, NULL, &err);
     if (json_str) {
         printf("%s\n", json_str);
-        free((void*)json_str);
+        free(json_str);
     }
 }
 
