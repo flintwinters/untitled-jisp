@@ -49,7 +49,7 @@ static yyjson_mut_val *ensure_ref_field(yyjson_mut_doc *doc) {
         ref = yyjson_mut_obj_get(root, "ref");
     } else {
         /* Coerce to integer numeric type if it exists (value preserved if numeric, becomes 0 if non-numeric). */
-        int64_t cur = (int64_t)yyjson_mut_get_real(ref);
+        int64_t cur = (int64_t)yyjson_mut_get_sint(ref);
         unsafe_yyjson_set_sint(ref, cur);
     }
     return ref;
@@ -60,7 +60,7 @@ static void jpm_doc_retain(yyjson_mut_doc *doc) {
     if (!doc) return;
     yyjson_mut_val *ref = ensure_ref_field(doc);
     if (!ref) return;
-    int64_t cur = (int64_t)yyjson_mut_get_real(ref);
+    int64_t cur = (int64_t)yyjson_mut_get_sint(ref);
     if (cur < 0) cur = 0;
     unsafe_yyjson_set_sint(ref, cur + 1);
 }
@@ -74,7 +74,7 @@ static void jpm_doc_release(yyjson_mut_doc *doc) {
         yyjson_mut_doc_free(doc);
         return;
     }
-    int64_t cur = (int64_t)yyjson_mut_get_real(ref);
+    int64_t cur = (int64_t)yyjson_mut_get_sint(ref);
     if (cur > 0) cur--;
     unsafe_yyjson_set_sint(ref, cur);
     if (cur == 0) {
@@ -127,8 +127,8 @@ void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
         yyjson_mut_val *val1_mut = yyjson_mut_arr_remove_last(stack);
         yyjson_mut_val *val2_mut = yyjson_mut_arr_remove_last(stack);
         
-        double val1 = val1_mut ? yyjson_mut_get_real(val1_mut) : 0;
-        double val2 = val2_mut ? yyjson_mut_get_real(val2_mut) : 0;
+        double val1 = val1_mut ? yyjson_mut_get_sint(val1_mut) : 0;
+        double val2 = val2_mut ? yyjson_mut_get_sint(val2_mut) : 0;
         
         yyjson_mut_arr_add_real(doc, stack, val1 + val2);
     }
@@ -142,15 +142,15 @@ void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_val *temp_sum_val = yyjson_mut_obj_get(root, "temp_sum");
     yyjson_mut_val *temp_mult_val = yyjson_mut_obj_get(root, "temp_mult");
     
-    double temp_sum = temp_sum_val ? yyjson_mut_get_real(temp_sum_val) : 0;
-    double temp_mult = temp_mult_val ? yyjson_mut_get_real(temp_mult_val) : 0;
+    double temp_sum = temp_sum_val ? yyjson_mut_get_sint(temp_sum_val) : 0;
+    double temp_mult = temp_mult_val ? yyjson_mut_get_sint(temp_mult_val) : 0;
     
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     double stack_val = 0;
     if (stack && yyjson_mut_arr_size(stack) > 0) {
         yyjson_mut_val *val_mut = yyjson_mut_arr_remove_last(stack);
         if (val_mut) {
-            stack_val = yyjson_mut_get_real(val_mut);
+            stack_val = yyjson_mut_get_sint(val_mut);
             // The memory for val_mut is managed by the doc's pool allocator.
         }
     }
@@ -214,12 +214,12 @@ int main(void) {
         jpm_doc_retain(doc);
         ref_val = yyjson_mut_obj_get(root_local, "ref");
         assert(ref_val != NULL);
-        assert((int64_t)yyjson_mut_get_real(ref_val) == 2);
+        assert((int64_t)yyjson_mut_get_int(ref_val) == 2);
 
         // Release once should decrement "ref" to 1 (document must not be freed)
         jpm_doc_release(doc);
         ref_val = yyjson_mut_obj_get(root_local, "ref");
-        assert((int64_t)yyjson_mut_get_real(ref_val) == 1);
+        assert((int64_t)yyjson_mut_get_int(ref_val) == 1);
     }
 
     // add_block
