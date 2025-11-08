@@ -23,8 +23,9 @@ Non-goals:
 
 ## Invariants and Safety
 
-- A pointer monad’s yyjson_mut_val * is only valid for the lifetime of the originating yyjson_mut_doc.
-- Do not use a pointer after `yyjson_mut_doc_free(doc)`.
+- A pointer monad’s yyjson_mut_val * is only valid while its associated reference-counted document wrapper (jpm_doc) is alive.
+- jpm_ptr creation retains the document (increments refcount); destroying/releasing the jpm_ptr releases the document (decrements refcount).
+- When the refcount reaches zero, the wrapper frees the underlying yyjson_mut_doc and itself; pointers become invalid immediately thereafter.
 - Operations that allocate more values (e.g., adding keys/elements) should not invalidate existing pointers in yyjson’s arena-based allocator, but the implementation must not assume relocations can never occur outside yyjson guarantees.
 - Thread-safety: Pointer monad is not thread-safe. If used across threads, external synchronization of the underlying document is required.
 
@@ -44,8 +45,14 @@ Non-goals:
 ## Data Types
 
 ```c
+/* Reference-counted wrapper for yyjson_mut_doc. */
+typedef struct jpm_doc {
+    yyjson_mut_doc *doc;    /* underlying yyjson mutable document */
+    size_t          refcnt; /* reference count; >=1 while alive */
+} jpm_doc;
+
 typedef struct jpm_ptr {
-    yyjson_mut_doc *doc;    /* owner document; nonnull when valid */
+    jpm_doc        *doc;    /* owner document wrapper; nonnull when valid */
     yyjson_mut_val *val;    /* target value pointer; nullable when invalid */
     const char     *path;   /* optional, may be NULL; original RFC 6901 path; owned by caller or separate allocator */
 } jpm_ptr;
@@ -71,11 +78,13 @@ Notes:
 
 Initialization (“return”):
 ```c
-/* Resolve a JSON Pointer path into a pointer monad (doc + val). */
-jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *out);
+/* Resolve a JSON Pointer path into a pointer monad (doc + val).
+   On success, retains the document (increments refcount). */
+jpm_status jpm_return(jpm_doc *doc, const char *rfc6901_path, jpm_ptr *out);
 ```
 - Preconditions: `doc != NULL`, `rfc6901_path != NULL`, `out != NULL`.
 - Postconditions: On success, `out->doc == doc` and `out->val` points to the resolved target; `out->path` may point to `rfc6901_path` or NULL (implementation defined).
+- Lifecycle: `jpm_return` increments `doc->refcnt`; callers must eventually call `jpm_ptr_release(...)` on the returned pointer to balance (which may free the document when the count reaches zero).
 - Errors: `JPM_ERR_NOT_FOUND` if path does not exist; `JPM_ERR_INVALID_ARG` if inputs are NULL or path invalid.
 
 Bind:
@@ -93,6 +102,19 @@ typedef jpm_status (*jpm_map_fn)(jpm_ptr in, void *ctx);
 /* Apply `f` to `in` without changing the pointer target; returns the same pointer on success. */
 jpm_status jpm_map(jpm_ptr in, jpm_map_fn f, void *ctx, jpm_ptr *out);
 ```
+
+Destruction/release:
+```c
+/* Release a pointer monad; decrements the doc's refcount and NULLs fields.
+   When the refcount reaches zero, frees the underlying yyjson_mut_doc and wrapper. */
+void jpm_ptr_release(jpm_ptr *p);
+
+/* Optional explicit doc retain/release helpers. */
+jpm_doc *jpm_doc_retain(jpm_doc *d);
+void jpm_doc_release(jpm_doc *d);
+```
+- jpm_ptr is a small handle; copying by value does not change refcount. Only creation via jpm_return (and other factory APIs) retains, and jpm_ptr_release releases.
+- Implementations should be idempotent when releasing a NULL/invalid pointer (no-op).
 
 Validation/introspection:
 ```c
@@ -117,7 +139,7 @@ jpm_status jpm_to_path(jpm_ptr p, char *buf, size_t buf_len);
 
 Preferred: Use yyjson’s JSON Pointer utilities.
 - Resolve with mutable-pointer API when available, e.g., `yyjson_mut_ptr_get(root_val, "/a/b")`.
-- If only document-level helpers exist, start from `yyjson_mut_doc_get_root(doc)`.
+- If only document-level helpers exist, start from `yyjson_mut_doc_get_root(doc->doc)`.
 
 Fallback: Manual RFC 6901 traversal.
 - Tokenize by "/" (skip leading "").
@@ -153,6 +175,7 @@ if (jpm_return(doc, "/metrics/count", &p) == JPM_OK && jpm_is_valid(p)) {
     (void)cur;
     /* Replace or update `v` according to yyjson mutation APIs. */
 }
+jpm_ptr_release(&p);
 ```
 
 Bind chaining to derive a sibling pointer:
@@ -168,7 +191,9 @@ if (jpm_return(doc, "/user", &start) == JPM_OK) {
     jpm_ptr profile;
     if (jpm_bind(start, select_sibling, NULL, &profile) == JPM_OK) {
         /* use `profile` */
+        jpm_ptr_release(&profile);
     }
+    jpm_ptr_release(&start);
 }
 ```
 
@@ -212,11 +237,18 @@ if (jpm_return(doc, "/user", &start) == JPM_OK) {
 #define JPM_PTR_H
 #include "yyjson.h"
 #include <stdbool.h>
+#include <stddef.h>
+
+/* Reference-counted document wrapper */
+typedef struct jpm_doc {
+    yyjson_mut_doc *doc;
+    size_t          refcnt;
+} jpm_doc;
 
 typedef struct jpm_ptr {
-    yyjson_mut_doc *doc;
+    jpm_doc        *doc;
     yyjson_mut_val *val;
-    const char *path; /* optional; lifetime managed by caller or separate allocator */
+    const char     *path; /* optional; lifetime managed by caller or separate allocator */
 } jpm_ptr;
 
 typedef enum jpm_status {
@@ -235,7 +267,13 @@ bool jpm_is_valid(jpm_ptr p);
 const char *jpm_path(jpm_ptr p);
 yyjson_mut_val *jpm_value(jpm_ptr p);
 
-jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *out);
+/* Retain/release APIs */
+jpm_doc *jpm_doc_retain(jpm_doc *d);
+void jpm_doc_release(jpm_doc *d);
+void jpm_ptr_release(jpm_ptr *p);
+
+/* Monad APIs */
+jpm_status jpm_return(jpm_doc *doc, const char *rfc6901_path, jpm_ptr *out);
 jpm_status jpm_bind(jpm_ptr in, jpm_fn f, void *ctx, jpm_ptr *out);
 jpm_status jpm_map(jpm_ptr in, jpm_map_fn f, void *ctx, jpm_ptr *out);
 
