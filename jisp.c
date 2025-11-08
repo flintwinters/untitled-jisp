@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "yyjson.h"
 
 // Forward declarations
@@ -15,6 +16,70 @@ typedef struct jisp_instruction_t {
     jisp_op op;
     const char *args_json; // JSON string for args, to be parsed
 } jisp_instruction;
+
+/*
+    Incremental change step 1:
+    - Add internal helpers to manage a root-level "ref" field on yyjson_mut_doc.
+    - These helpers are not yet wired into main or opcodes; behavior remains unchanged.
+    - Plan: In a subsequent step, replace direct yyjson_mut_doc_free(...) calls with jpm_doc_release(...)
+      and introduce retains at creation sites or pointer factories.
+*/
+
+/* Ensure document has an object root; create one if missing or not an object. */
+static yyjson_mut_val *ensure_root_object(yyjson_mut_doc *doc) {
+    if (!doc) return NULL;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root || !yyjson_mut_is_obj(root)) {
+        root = yyjson_mut_obj(doc);
+        yyjson_mut_doc_set_root(doc, root);
+    }
+    return root;
+}
+
+/* Ensure root["ref"] exists and is a numeric field; returns the value node. */
+static yyjson_mut_val *ensure_ref_field(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = ensure_root_object(doc);
+    if (!root) return NULL;
+
+    yyjson_mut_val *ref = yyjson_mut_obj_get(root, "ref");
+    if (!ref) {
+        /* Initialize "ref" to 0 if absent. */
+        yyjson_mut_obj_add_int(doc, root, "ref", 0);
+        ref = yyjson_mut_obj_get(root, "ref");
+    } else {
+        /* Coerce to integer numeric type if it exists (value preserved if numeric, becomes 0 if non-numeric). */
+        int64_t cur = (int64_t)yyjson_mut_get_real(ref);
+        unsafe_yyjson_set_sint(ref, cur);
+    }
+    return ref;
+}
+
+/* Retain: increments root["ref"]; creates it if missing. */
+static void jpm_doc_retain(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    yyjson_mut_val *ref = ensure_ref_field(doc);
+    if (!ref) return;
+    int64_t cur = (int64_t)yyjson_mut_get_real(ref);
+    if (cur < 0) cur = 0;
+    unsafe_yyjson_set_sint(ref, cur + 1);
+}
+
+/* Release: decrements root["ref"]; frees doc when it reaches zero. */
+static void jpm_doc_release(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    yyjson_mut_val *ref = ensure_ref_field(doc);
+    if (!ref) {
+        /* Fallback: no ref field; free immediately to avoid leak. */
+        yyjson_mut_doc_free(doc);
+        return;
+    }
+    int64_t cur = (int64_t)yyjson_mut_get_real(ref);
+    if (cur > 0) cur--;
+    unsafe_yyjson_set_sint(ref, cur);
+    if (cur == 0) {
+        yyjson_mut_doc_free(doc);
+    }
+}
 
 
 // Core "Opcodes"
