@@ -243,11 +243,11 @@ int main(void) {
     
     const jisp_instruction main_part2[] = {
         {push_value, "[10]"},
-        {calculate_final_result, NULL},
-        {print_json, NULL}
+        {calculate_final_result, NULL}
     };
     process_functions(doc, main_part2, sizeof(main_part2)/sizeof(jisp_instruction));
 
+    print_json(doc, NULL);
     yyjson_mut_doc_free(doc);
     return 0;
 }
