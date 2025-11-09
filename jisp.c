@@ -663,6 +663,118 @@ static void jisp_stack_log_remove_last(yyjson_mut_doc *doc, yyjson_mut_val *stac
     }
 }
 
+/* Execution stack (JPM pointer) helpers */
+
+static yyjson_mut_val *ensure_execution_array(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = ensure_root_object(doc);
+    if (!root) return NULL;
+    yyjson_mut_val *exec = yyjson_mut_obj_get(root, "execution");
+    if (exec) {
+        if (yyjson_mut_is_arr(exec)) return exec;
+        return NULL;
+    }
+    exec = yyjson_mut_arr(doc);
+    if (!exec) return NULL;
+    yyjson_mut_obj_add_val(doc, root, "execution", exec);
+    return exec;
+}
+
+static void push_exec_ptr(yyjson_mut_doc *doc, const char *path) {
+    yyjson_mut_val *exec = ensure_execution_array(doc);
+    if (!exec || !path) return;
+    yyjson_mut_val *obj = yyjson_mut_obj(doc);
+    if (!obj) return;
+    yyjson_mut_obj_add_strcpy(doc, obj, "$ptr", path);
+    yyjson_mut_arr_append(exec, obj);
+}
+
+static const char *pop_exec_ptr(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return NULL;
+    yyjson_mut_val *exec = yyjson_mut_obj_get(root, "execution");
+    if (!exec || !yyjson_mut_is_arr(exec) || yyjson_mut_arr_size(exec) == 0) return NULL;
+    yyjson_mut_val *obj = yyjson_mut_arr_remove_last(exec);
+    if (!obj || !yyjson_mut_is_obj(obj)) return NULL;
+    yyjson_mut_val *pv = yyjson_mut_obj_get(obj, "$ptr");
+    if (!pv || !yyjson_mut_is_str(pv)) return NULL;
+    return yyjson_get_str((yyjson_val *)pv);
+}
+
+static char *join_paths(const char *a, const char *b) {
+    if (!a || !b) return NULL;
+    size_t la = strlen(a), lb = strlen(b);
+    char *buf = (char *)malloc(la + lb + 1);
+    if (!buf) return NULL;
+    memcpy(buf, a, la);
+    memcpy(buf + la, b, lb);
+    buf[la + lb] = '\0';
+    return buf;
+}
+
+static void schedule_array_recursive(yyjson_mut_doc *doc, const char *base_path, size_t idx, size_t max) {
+    if (!base_path) return;
+    if (idx >= max) return;
+    /* Schedule in forward order by pushing during unwind so LIFO processes 0..n-1 */
+    schedule_array_recursive(doc, base_path, idx + 1, max);
+    char suffix[32];
+    snprintf(suffix, sizeof(suffix), "/%zu", idx);
+    char *full = join_paths(base_path, suffix);
+    if (full) {
+        push_exec_ptr(doc, full);
+        free(full);
+    }
+}
+
+static void process_execution_recursive(yyjson_mut_doc *doc) {
+    const char *path = pop_exec_ptr(doc);
+    if (!path) return;
+
+    jpm_ptr p;
+    jpm_status st = jpm_return(doc, path, &p);
+    if (st != JPM_OK || !jpm_is_valid(p)) {
+        jpm_ptr_release(&p);
+        process_execution_recursive(doc);
+        return;
+    }
+
+    yyjson_type t = unsafe_yyjson_get_type(p.val);
+    if (t == YYJSON_TYPE_STR || t == YYJSON_TYPE_NUM || t == YYJSON_TYPE_ARR) {
+        yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_execution");
+        jisp_stack_push_copy_and_log(doc, stack, p.val);
+    } else if (t == YYJSON_TYPE_OBJ) {
+        yyjson_mut_val *dot = yyjson_mut_obj_get(p.val, ".");
+        if (dot) {
+            if (yyjson_mut_is_arr(dot)) {
+                size_t n = yyjson_mut_arr_size(dot);
+                char *dot_path = join_paths(path, "/.");
+                if (dot_path) {
+                    schedule_array_recursive(doc, dot_path, 0, n);
+                    free(dot_path);
+                }
+            } else if (yyjson_mut_is_str(dot)) {
+                const char *name = yyjson_get_str((yyjson_val *)dot);
+                jisp_op op = jisp_op_registry_get(name);
+                if (op) {
+                    op(doc);
+                } else {
+                    yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_execution");
+                    jisp_stack_push_copy_and_log(doc, stack, p.val);
+                }
+            } else {
+                jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
+            }
+        } else {
+            yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_execution");
+            jisp_stack_push_copy_and_log(doc, stack, p.val);
+        }
+    } else {
+        jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
+    }
+
+    jpm_ptr_release(&p);
+    process_execution_recursive(doc);
+}
+
 /* Core "Opcodes" */
 
 
@@ -951,61 +1063,33 @@ static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) 
     }
 }
 
-/* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
+/* process_ep_array: Interprets an entrypoint-like array of literals and directives; reimplemented to use a JPM pointer execution stack (no loops). */
 static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
-    if (!doc || !ep) return;
-    if (!yyjson_mut_is_arr(ep)) {
-        jisp_fatal(doc, "entrypoint must be an array");
-    }
-
-    yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_entrypoint");
-
-    yyjson_mut_arr_iter it;
-    yyjson_mut_val *elem;
-    if (!yyjson_mut_arr_iter_init(ep, &it)) return;
-
-    while ((elem = yyjson_mut_arr_iter_next(&it))) {
-        if (yyjson_mut_is_str(elem)) {
-            jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else if (yyjson_is_num((yyjson_val *)elem)) {
-            jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else if (yyjson_mut_is_arr(elem)) {
-            jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else if (yyjson_mut_is_obj(elem)) {
-            /* Special-case: object with "." field: array → execute as entrypoint; string → run op if found */
-            yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
-            if (dot) {
-                if (yyjson_mut_is_arr(dot)) {
-                    process_ep_array(doc, dot);
-                } else if (yyjson_mut_is_str(dot)) {
-                    const char *name = yyjson_get_str((yyjson_val *)dot);
-                    jisp_op op = jisp_op_registry_get(name);
-                    if (op) {
-                        op(doc);
-                    } else {
-                        /* Unknown op name; treat the object as a literal */
-                        yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
-                    }
-                } else {
-                    jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
-                }
-            } else {
-                yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
-            }
-        } else {
-            jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
-        }
-    }
-}
-
-/* process_entrypoint: Top-level driver for entrypoint arrays; use to seed the stack from initial program data and nested directives. */
-static void process_entrypoint(yyjson_mut_doc *doc) {
-    if (!doc) return;
+    (void)ep;
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     if (!root) return;
-    yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
-    if (!ep) return;
-    process_ep_array(doc, ep);
+    yyjson_mut_val *ep_arr = yyjson_mut_obj_get(root, "entrypoint");
+    if (!ep_arr) return;
+    if (!yyjson_mut_is_arr(ep_arr)) {
+        jisp_fatal(doc, "entrypoint must be an array");
+    }
+    size_t n = yyjson_mut_arr_size(ep_arr);
+    schedule_array_recursive(doc, "/entrypoint", 0, n);
+    process_execution_recursive(doc);
+}
+
+/* process_entrypoint: Top-level driver; identical behavior to process_ep_array, using JPM pointer execution stack (no loops). */
+static void process_entrypoint(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return;
+    yyjson_mut_val *ep_arr = yyjson_mut_obj_get(root, "entrypoint");
+    if (!ep_arr) return;
+    if (!yyjson_mut_is_arr(ep_arr)) {
+        jisp_fatal(doc, "entrypoint must be an array");
+    }
+    size_t n = yyjson_mut_arr_size(ep_arr);
+    schedule_array_recursive(doc, "/entrypoint", 0, n);
+    process_execution_recursive(doc);
 }
 
 /* main: Orchestrates program flow from input file to execution and output; run as the CLI entry point. */
