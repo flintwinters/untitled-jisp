@@ -412,7 +412,7 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
             }
         } else if (yyjson_is_num((yyjson_val *)elem)) {
             /* Numeric literal: translate to push_value with inline JSON args like "[50]" */
-            double v = yyjson_get_real((yyjson_val *)elem);
+            double v = yyjson_get_int((yyjson_val *)elem);
             char buf[64];
             int n = snprintf(buf, sizeof(buf), "[%.17g]", v);
             if (n > 0) {
