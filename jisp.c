@@ -752,6 +752,7 @@ int main(int argc, char **argv) {
     run_tokens(doc, main_part2, sizeof(main_part2)/sizeof(main_part2[0]));
 
     process_entrypoint(doc);
+    print_json(doc);
     yyjson_mut_doc_free(doc);
     free(buf);
     jisp_op_registry_free();
