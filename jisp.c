@@ -381,7 +381,7 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
     if (!ep) return;
     if (!yyjson_mut_is_arr(ep)) {
-        fprintf(stderr, "entrypoint must be an array of strings\n");
+        fprintf(stderr, "entrypoint must be an array of strings or numbers\n");
         return;
     }
 
