@@ -594,13 +594,23 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
             /* Push array literal by deep-copy */
             yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         } else if (yyjson_mut_is_obj(elem)) {
-            /* Special-case: object with "." field is treated as an array to execute */
+            /* Special-case: object with "." field: array → execute as entrypoint; string → run op if found */
             yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
             if (dot) {
-                if (!yyjson_mut_is_arr(dot)) {
-                    jisp_fatal(doc, "entrypoint object '.' field must be an array");
+                if (yyjson_mut_is_arr(dot)) {
+                    process_ep_array(doc, dot);
+                } else if (yyjson_mut_is_str(dot)) {
+                    const char *name = yyjson_get_str((yyjson_val *)dot);
+                    jisp_op op = jisp_op_registry_get(name);
+                    if (op) {
+                        op(doc);
+                    } else {
+                        /* Unknown op name; treat the object as a literal */
+                        yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+                    }
+                } else {
+                    jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
                 }
-                process_ep_array(doc, dot);
             } else {
                 /* Push object literal by deep-copy */
                 yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
