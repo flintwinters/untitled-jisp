@@ -5,7 +5,7 @@ Understanding
 - Introduce a lightweight C token union to represent an instruction stream: tokens can be one of:
   - OP: a jisp_op function pointer
   - INT/REAL/STR: literal values
-  - VAL: a const yyjson_val* literal to be deep-copied into the doc and pushed
+  - JPM: a jpm_ptr monad; interpreter dereferences and deep-copies the pointed value into the doc, then pushes it (or may push a pointer handle per JPM integration)
 - Interpreter semantics:
   - Literal tokens push a corresponding yyjson value onto root["stack"].
   - OP tokens invoke the function with signature void jisp_op(yyjson_mut_doc *doc).
@@ -22,14 +22,14 @@ API/Code changes
    - Update all existing ops: push_value will be removed; pop_and_store, duplicate_top, add_two_top, calculate_final_result, print_json adapted to stack-args.
 
 2) Introduce token union and interpreter for C-authored sequences
-   - enum jisp_tok_kind { JISP_TOK_OP, JISP_TOK_INT, JISP_TOK_REAL, JISP_TOK_STR, JISP_TOK_VAL };
-   - struct jisp_tok { kind; union { jisp_op op; int64_t i; double d; const char *s; const yyjson_val *v; } as; };
+   - enum jisp_tok_kind { JISP_TOK_OP, JISP_TOK_INT, JISP_TOK_REAL, JISP_TOK_STR, JISP_TOK_JPM };
+   - struct jisp_tok { kind; union { jisp_op op; int64_t i; double d; const char *s; jpm_ptr ptr; } as; };
    - void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count);
    - Behavior:
      - INT → yyjson_mut_arr_add_sint
      - REAL → yyjson_mut_arr_add_real
      - STR → duplicate into doc and push as string
-     - VAL → deep-copy referenced yyjson_val into doc and push
+     - JPM → dereference jpm_ptr to a value; deep-copy into doc and push (or push pointer handle per JPM integration)
      - OP → call function
 
 3) Rewrite process_entrypoint(doc)
