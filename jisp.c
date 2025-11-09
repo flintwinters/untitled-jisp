@@ -330,6 +330,8 @@ int main(void) {
             jpm_status st = jpm_return(doc, "/", &p_root);
             assert(st == JPM_OK);
             assert(jpm_is_valid(p_root));
+            const char *pth = jpm_path(p_root);
+            assert(pth && strcmp(pth, "/") == 0);
             assert(jpm_value(p_root) == root_local);
 
             ref_val = yyjson_mut_obj_get(root_local, "ref");
