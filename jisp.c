@@ -364,126 +364,126 @@ int main(void) {
         assert((int64_t)yyjson_mut_get_int(ref_val) == 1);
     }
 
-        // Minimal JPM tests
-        {
-            yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
-            yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
-            int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
+    // Minimal JPM tests
+    {
+        yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+        yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+        int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
 
-            // Not found path should not change refcount
-            jpm_ptr p_bad;
-            jpm_status st_bad = jpm_return(doc, "/nope", &p_bad);
-            assert(st_bad == JPM_ERR_NOT_FOUND);
-            ref_val = yyjson_mut_obj_get(root_local, "ref");
-            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+        // Not found path should not change refcount
+        jpm_ptr p_bad;
+        jpm_status st_bad = jpm_return(doc, "/nope", &p_bad);
+        assert(st_bad == JPM_ERR_NOT_FOUND);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
 
-            // Root path "/" should work and retain
-            jpm_ptr p_root;
-            jpm_status st = jpm_return(doc, "/", &p_root);
-            assert(st == JPM_OK);
-            assert(jpm_is_valid(p_root));
-            const char *pth = jpm_path(p_root);
-            assert(pth && strcmp(pth, "/") == 0);
-            assert(jpm_value(p_root) == root_local);
+        // Root path "/" should work and retain
+        jpm_ptr p_root;
+        jpm_status st = jpm_return(doc, "/", &p_root);
+        assert(st == JPM_OK);
+        assert(jpm_is_valid(p_root));
+        const char *pth = jpm_path(p_root);
+        assert(pth && strcmp(pth, "/") == 0);
+        assert(jpm_value(p_root) == root_local);
 
-            ref_val = yyjson_mut_obj_get(root_local, "ref");
-            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before + 1);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before + 1);
 
-            // Release should decrement back
-            jpm_ptr_release(&p_root);
-            ref_val = yyjson_mut_obj_get(root_local, "ref");
-            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
-        }
+        // Release should decrement back
+        jpm_ptr_release(&p_root);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+    }
 
-        // More JPM tests: support one-segment paths and bind/map
-        {
-            yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
-            yyjson_mut_val *stack_local = yyjson_mut_obj_get(root_local, "stack");
-            yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
-            int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
+    // More JPM tests: support one-segment paths and bind/map
+    {
+        yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+        yyjson_mut_val *stack_local = yyjson_mut_obj_get(root_local, "stack");
+        yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+        int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
 
-            jpm_ptr p_root;
-            jpm_status st0 = jpm_return(doc, "/", &p_root);
-            assert(st0 == JPM_OK && jpm_is_valid(p_root));
+        jpm_ptr p_root;
+        jpm_status st0 = jpm_return(doc, "/", &p_root);
+        assert(st0 == JPM_OK && jpm_is_valid(p_root));
 
-            jpm_ptr p_stack_via_return;
-            jpm_status st1 = jpm_return(doc, "/stack", &p_stack_via_return);
-            assert(st1 == JPM_OK && jpm_is_valid(p_stack_via_return));
-            assert(jpm_value(p_stack_via_return) == stack_local);
+        jpm_ptr p_stack_via_return;
+        jpm_status st1 = jpm_return(doc, "/stack", &p_stack_via_return);
+        assert(st1 == JPM_OK && jpm_is_valid(p_stack_via_return));
+        assert(jpm_value(p_stack_via_return) == stack_local);
 
-            jpm_ptr p_stack_via_bind;
-            jpm_status st2 = jpm_bind(p_root, jpm_select_path, (void*)"/stack", &p_stack_via_bind);
-            assert(st2 == JPM_OK && jpm_is_valid(p_stack_via_bind));
-            assert(jpm_value(p_stack_via_bind) == stack_local);
+        jpm_ptr p_stack_via_bind;
+        jpm_status st2 = jpm_bind(p_root, jpm_select_path, (void*)"/stack", &p_stack_via_bind);
+        assert(st2 == JPM_OK && jpm_is_valid(p_stack_via_bind));
+        assert(jpm_value(p_stack_via_bind) == stack_local);
 
-            jpm_ptr p_after_map;
-            jpm_status st3 = jpm_map(p_root, jpm_check_path_is_root, NULL, &p_after_map);
-            assert(st3 == JPM_OK && jpm_is_valid(p_after_map));
-            assert(jpm_value(p_after_map) == jpm_value(p_root));
+        jpm_ptr p_after_map;
+        jpm_status st3 = jpm_map(p_root, jpm_check_path_is_root, NULL, &p_after_map);
+        assert(st3 == JPM_OK && jpm_is_valid(p_after_map));
+        assert(jpm_value(p_after_map) == jpm_value(p_root));
 
-            jpm_ptr_release(&p_stack_via_bind);
-            jpm_ptr_release(&p_stack_via_return);
-            jpm_ptr_release(&p_root);
+        jpm_ptr_release(&p_stack_via_bind);
+        jpm_ptr_release(&p_stack_via_return);
+        jpm_ptr_release(&p_root);
 
-            ref_val = yyjson_mut_obj_get(root_local, "ref");
-            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
-        }
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+    }
 
-        {
-            yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+    {
+        yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
 
-            /* Prepare nested structures for multi-segment and RFC 6901 decoding tests */
-            yyjson_mut_val *user = yyjson_mut_obj(doc);
-            yyjson_mut_val *profile = yyjson_mut_obj(doc);
-            yyjson_mut_obj_add_val(doc, user, "profile", profile);
-            yyjson_mut_obj_add_val(doc, root_local, "user", user);
-            yyjson_mut_obj_add_int(doc, profile, "age", 42);
-            yyjson_mut_obj_add_int(doc, profile, "x/y", 1);  /* requires ~1 decoding */
-            yyjson_mut_obj_add_int(doc, profile, "x~y", 2);  /* requires ~0 decoding */
+        /* Prepare nested structures for multi-segment and RFC 6901 decoding tests */
+        yyjson_mut_val *user = yyjson_mut_obj(doc);
+        yyjson_mut_val *profile = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_val(doc, user, "profile", profile);
+        yyjson_mut_obj_add_val(doc, root_local, "user", user);
+        yyjson_mut_obj_add_int(doc, profile, "age", 42);
+        yyjson_mut_obj_add_int(doc, profile, "x/y", 1);  /* requires ~1 decoding */
+        yyjson_mut_obj_add_int(doc, profile, "x~y", 2);  /* requires ~0 decoding */
 
-            yyjson_mut_val *nums = yyjson_mut_arr(doc);
-            yyjson_mut_arr_add_int(doc, nums, 7);
-            yyjson_mut_arr_add_int(doc, nums, 8);
-            yyjson_mut_arr_add_int(doc, nums, 9);
-            yyjson_mut_obj_add_val(doc, root_local, "nums", nums);
+        yyjson_mut_val *nums = yyjson_mut_arr(doc);
+        yyjson_mut_arr_add_int(doc, nums, 7);
+        yyjson_mut_arr_add_int(doc, nums, 8);
+        yyjson_mut_arr_add_int(doc, nums, 9);
+        yyjson_mut_obj_add_val(doc, root_local, "nums", nums);
 
-            yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
-            int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
+        yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+        int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
 
-            jpm_ptr p_age;
-            assert(jpm_return(doc, "/user/profile/age", &p_age) == JPM_OK && jpm_is_valid(p_age));
-            assert((int64_t)yyjson_mut_get_int(jpm_value(p_age)) == 42);
+        jpm_ptr p_age;
+        assert(jpm_return(doc, "/user/profile/age", &p_age) == JPM_OK && jpm_is_valid(p_age));
+        assert((int64_t)yyjson_mut_get_int(jpm_value(p_age)) == 42);
 
-            jpm_ptr p_slash;
-            assert(jpm_return(doc, "/user/profile/x~1y", &p_slash) == JPM_OK && jpm_is_valid(p_slash));
-            assert((int64_t)yyjson_mut_get_int(jpm_value(p_slash)) == 1);
+        jpm_ptr p_slash;
+        assert(jpm_return(doc, "/user/profile/x~1y", &p_slash) == JPM_OK && jpm_is_valid(p_slash));
+        assert((int64_t)yyjson_mut_get_int(jpm_value(p_slash)) == 1);
 
-            jpm_ptr p_tilde;
-            assert(jpm_return(doc, "/user/profile/x~0y", &p_tilde) == JPM_OK && jpm_is_valid(p_tilde));
-            assert((int64_t)yyjson_mut_get_int(jpm_value(p_tilde)) == 2);
+        jpm_ptr p_tilde;
+        assert(jpm_return(doc, "/user/profile/x~0y", &p_tilde) == JPM_OK && jpm_is_valid(p_tilde));
+        assert((int64_t)yyjson_mut_get_int(jpm_value(p_tilde)) == 2);
 
-            jpm_ptr p_idx;
-            assert(jpm_return(doc, "/nums/2", &p_idx) == JPM_OK && jpm_is_valid(p_idx));
-            assert((int64_t)yyjson_mut_get_int(jpm_value(p_idx)) == 9);
+        jpm_ptr p_idx;
+        assert(jpm_return(doc, "/nums/2", &p_idx) == JPM_OK && jpm_is_valid(p_idx));
+        assert((int64_t)yyjson_mut_get_int(jpm_value(p_idx)) == 9);
 
-            /* Out-of-range and invalid paths should be treated as not found with yyjson_mut_ptr_get */
-            jpm_ptr p_oob;
-            assert(jpm_return(doc, "/nums/99", &p_oob) == JPM_ERR_NOT_FOUND);
+        /* Out-of-range and invalid paths should be treated as not found with yyjson_mut_ptr_get */
+        jpm_ptr p_oob;
+        assert(jpm_return(doc, "/nums/99", &p_oob) == JPM_ERR_NOT_FOUND);
 
-            jpm_ptr p_bad_type;
-            assert(jpm_return(doc, "/temp_sum/0", &p_bad_type) == JPM_ERR_NOT_FOUND);
+        jpm_ptr p_bad_type;
+        assert(jpm_return(doc, "/temp_sum/0", &p_bad_type) == JPM_ERR_NOT_FOUND);
 
-            jpm_ptr p_bad_escape;
-            assert(jpm_return(doc, "/user/profile/x~2y", &p_bad_escape) == JPM_ERR_NOT_FOUND);
+        jpm_ptr p_bad_escape;
+        assert(jpm_return(doc, "/user/profile/x~2y", &p_bad_escape) == JPM_ERR_NOT_FOUND);
 
-            jpm_ptr_release(&p_idx);
-            jpm_ptr_release(&p_tilde);
-            jpm_ptr_release(&p_slash);
-            jpm_ptr_release(&p_age);
+        jpm_ptr_release(&p_idx);
+        jpm_ptr_release(&p_tilde);
+        jpm_ptr_release(&p_slash);
+        jpm_ptr_release(&p_age);
 
-            ref_val = yyjson_mut_obj_get(root_local, "ref");
-            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
-        }
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+    }
 
         // add_block
     const jisp_instruction add_block[] = {
