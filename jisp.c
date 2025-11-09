@@ -770,21 +770,43 @@ void undo_last_residual(yyjson_mut_doc *doc) {
     const char *path = yyjson_get_str((yyjson_val *)pathv);
 
     if (strcmp(op, "add") == 0) {
+        /* Best-effort undo: if this was a stack push, pop it; otherwise no-op. */
         if (strcmp(path, "/stack/-") == 0) {
             yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
             if (!stack || !yyjson_mut_is_arr(stack) || yyjson_mut_arr_size(stack) == 0) {
-                jisp_fatal(doc, "undo_last_residual: cannot remove last element from 'stack'");
+                /* Nothing to undo; best-effort no-op. */
+                return;
             }
             (void)yyjson_mut_arr_remove_last(stack);
         } else {
-            jisp_fatal(doc, "undo_last_residual: only supports undo for add to '/stack/-' at the moment");
+            /* Unsupported path for now: best-effort no-op. */
+            return;
         }
     } else if (strcmp(op, "replace") == 0) {
-        jisp_fatal(doc, "undo_last_residual: cannot undo 'replace' without previous value");
+        /* No previous value captured in minimal mode; best-effort no-op. */
+        return;
     } else if (strcmp(op, "remove") == 0) {
-        jisp_fatal(doc, "undo_last_residual: cannot undo 'remove' without saved value");
+        /* If the patch captured the removed value, we can best-effort restore it.
+           Currently support stack removals like "/stack/<idx>" by re-appending the saved value. */
+        yyjson_mut_val *valv = yyjson_mut_obj_get(patch, "value");
+        if (!valv) {
+            /* No saved value; best-effort no-op. */
+            return;
+        }
+        if (strncmp(path, "/stack/", 7) == 0) {
+            yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+            if (!stack || !yyjson_mut_is_arr(stack)) return;
+            yyjson_mut_val *copy = jisp_mut_deep_copy(doc, valv);
+            if (copy) {
+                yyjson_mut_arr_append(stack, copy);
+            }
+            return;
+        }
+        /* Unsupported path kinds: best-effort no-op. */
+        return;
     } else {
-        jisp_fatal(doc, "undo_last_residual: unknown residual op '%s'", op ? op : "(null)");
+        /* Unknown op: best-effort no-op. */
+        return;
     }
 }
 
