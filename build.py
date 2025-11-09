@@ -35,14 +35,18 @@ def build():
             console.print(f"[green]Build succeeded![/green]\n")
             # Run the executable
             console.print(f"[cyan]Running {TARGET}...[/cyan]\n")
-            subprocess.run([
+            result = subprocess.run([
                 "valgrind", 
                 "--errors-for-leak-kinds=all",
                 "--error-exitcode=1",
                 "--leak-check=full",
                 "--show-leak-kinds=all",
                 "./" + TARGET
-            ])
+            ], capture_output=True, text=True)
+            if result.stdout:
+                console.print(result.stdout, highlight=True)
+            if result.stderr:
+                console.print(result.stderr, highlight=True)
     except subprocess.CalledProcessError:
         console.print("[red]Build process encountered an error.[/red]")
 
