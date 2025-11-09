@@ -566,6 +566,68 @@ static void record_patch_remove(yyjson_mut_doc *doc, const char *path) {
     yyjson_mut_arr_append(res, patch);
 }
 
+/* Residual patch grouping helpers:
+   - residual_group_begin: create a new array group if reversible is enabled (NULL otherwise).
+   - residual_group_add_patch_with_{val,real}: append a patch object to the group, or fall back to single-entry logging.
+   - residual_group_commit: append the whole group array to root["residual"].
+   These helpers allow ops that perform multiple edits to group them for single-step undo. */
+static yyjson_mut_val *residual_group_begin(yyjson_mut_doc *doc) {
+    if (!doc) return NULL;
+    if (!is_reversible_enabled(doc)) return NULL;
+    return yyjson_mut_arr(doc);
+}
+
+static void residual_group_add_patch_with_val(yyjson_mut_doc *doc,
+                                              yyjson_mut_val *group,
+                                              const char *op,
+                                              const char *path,
+                                              yyjson_mut_val *val) {
+    if (!doc || !op || !path) return;
+    if (!group || !yyjson_mut_is_arr(group)) {
+        /* Fallback to direct single-entry residual append */
+        record_patch_with_val(doc, op, path, val);
+        return;
+    }
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", op);
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    if (val) {
+        yyjson_mut_val *vcopy = jisp_mut_deep_copy(doc, val);
+        if (vcopy) {
+            yyjson_mut_obj_add_val(doc, patch, "value", vcopy);
+        }
+    }
+    yyjson_mut_arr_append(group, patch);
+}
+
+static void residual_group_add_patch_with_real(yyjson_mut_doc *doc,
+                                               yyjson_mut_val *group,
+                                               const char *op,
+                                               const char *path,
+                                               double num) {
+    if (!doc || !op || !path) return;
+    if (!group || !yyjson_mut_is_arr(group)) {
+        /* Fallback to direct single-entry residual append */
+        record_patch_with_real(doc, op, path, num);
+        return;
+    }
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", op);
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    yyjson_mut_obj_add_real(doc, patch, "value", num);
+    yyjson_mut_arr_append(group, patch);
+}
+
+static void residual_group_commit(yyjson_mut_doc *doc, yyjson_mut_val *group) {
+    if (!doc || !group) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+    yyjson_mut_arr_append(res, group);
+}
+
 /* jisp_stack_log_remove_last: Records the removal of the current top-of-stack index; call immediately before yyjson_mut_arr_remove_last so replay aligns. 
    Additionally records the value being removed in the patch's "value" field for potential undo. */
 static void jisp_stack_log_remove_last(yyjson_mut_doc *doc, yyjson_mut_val *stack) {
@@ -744,20 +806,19 @@ void print_json(yyjson_mut_doc *doc) {
     }
 }
 
-/* undo_last_residual: Best-effort undo for the last minimal residual log entry; use for experimentation until full inversion exists. */
-void undo_last_residual(yyjson_mut_doc *doc) {
+/* undo_last_residual: Best-effort undo for the last residual entry.
+   Now supports grouped entries where the last residual item is an array of patch objects;
+   the group will be undone in reverse order. */
+static void undo_one_patch(yyjson_mut_doc *doc, yyjson_mut_val *patch) {
+    if (!doc || !patch) return;
+
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     if (!root) {
         jisp_fatal(doc, "undo_last_residual: missing root");
     }
-    yyjson_mut_val *residual = yyjson_mut_obj_get(root, "residual");
-    if (!residual || !yyjson_mut_is_arr(residual) || yyjson_mut_arr_size(residual) == 0) {
-        jisp_fatal(doc, "undo_last_residual: 'residual' is missing or empty");
-    }
 
-    yyjson_mut_val *patch = yyjson_mut_arr_remove_last(residual);
-    if (!patch || !yyjson_mut_is_obj(patch)) {
-        jisp_fatal(doc, "undo_last_residual: top residual entry is not an object");
+    if (!yyjson_mut_is_obj(patch)) {
+        jisp_fatal(doc, "undo_last_residual: residual entry is not an object");
     }
 
     yyjson_mut_val *opv = yyjson_mut_obj_get(patch, "op");
@@ -807,6 +868,40 @@ void undo_last_residual(yyjson_mut_doc *doc) {
     } else {
         /* Unknown op: best-effort no-op. */
         return;
+    }
+}
+
+void undo_last_residual(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) {
+        jisp_fatal(doc, "undo_last_residual: missing root");
+    }
+    yyjson_mut_val *residual = yyjson_mut_obj_get(root, "residual");
+    if (!residual || !yyjson_mut_is_arr(residual) || yyjson_mut_arr_size(residual) == 0) {
+        jisp_fatal(doc, "undo_last_residual: 'residual' is missing or empty");
+    }
+
+    yyjson_mut_val *entry = yyjson_mut_arr_remove_last(residual);
+    if (!entry) {
+        jisp_fatal(doc, "undo_last_residual: failed to pop residual entry");
+    }
+
+    if (yyjson_mut_is_obj(entry)) {
+        /* Single patch object */
+        undo_one_patch(doc, entry);
+        return;
+    } else if (yyjson_mut_is_arr(entry)) {
+        /* Grouped patches: undo in reverse order */
+        while (yyjson_mut_arr_size(entry) > 0) {
+            yyjson_mut_val *patch = yyjson_mut_arr_remove_last(entry);
+            if (!patch || !yyjson_mut_is_obj(patch)) {
+                jisp_fatal(doc, "undo_last_residual: grouped residual contains non-object entry");
+            }
+            undo_one_patch(doc, patch);
+        }
+        return;
+    } else {
+        jisp_fatal(doc, "undo_last_residual: top residual entry must be an object or array of objects");
     }
 }
 
