@@ -315,11 +315,27 @@ void process_functions(yyjson_mut_doc *doc, const jisp_instruction *instructions
     }
 }
 
-int main(void) {
-    // Initial JSON
+int main(int argc, char **argv) {
+    // Load initial JSON from file provided as first command-line argument.
+    const char *filename = argv[1];
+    FILE *fp = fopen(filename, "rb");
+    fseek(fp, 0, SEEK_END);
+    long fsz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    char *buf = (char *)malloc((size_t)fsz + 1);
+    fread(buf, 1, (size_t)fsz, fp);
+    buf[fsz] = '\0';
+    fclose(fp);
+
+    yyjson_doc *in = yyjson_read(buf, (size_t)fsz, 0);
+    yyjson_val *in_root = yyjson_doc_get_root(in);
+
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
-    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_val *root = yyjson_val_mut_copy(doc, in_root);
     yyjson_mut_doc_set_root(doc, root);
+
+    free(buf);
+    yyjson_doc_free(in);
     
     yyjson_mut_val *stack = yyjson_mut_arr(doc);
     yyjson_mut_obj_add_val(doc, root, "stack", stack);
