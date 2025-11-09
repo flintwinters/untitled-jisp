@@ -730,10 +730,23 @@ void add_two_top(yyjson_mut_doc *doc) {
         jisp_fatal(doc, "add_two_top: need at least two values on stack");
     }
 
-    jisp_stack_log_remove_last(doc, stack);
+    /* Begin a residual group so both pops and the push are undone together. */
+    yyjson_mut_val *group = residual_group_begin(doc);
+
+    /* Pop first operand (top of stack) and record remove */
+    size_t sz = yyjson_mut_arr_size(stack);
+    char path0[64];
+    snprintf(path0, sizeof(path0), "/stack/%zu", sz - 1);
     yyjson_mut_val *val1_mut = yyjson_mut_arr_remove_last(stack);
-    jisp_stack_log_remove_last(doc, stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path0, val1_mut);
+
+    /* Pop second operand and record remove */
+    sz = yyjson_mut_arr_size(stack);
+    char path1[64];
+    snprintf(path1, sizeof(path1), "/stack/%zu", sz - 1);
     yyjson_mut_val *val2_mut = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path1, val2_mut);
+
     if (!val1_mut || !val2_mut) {
         jisp_fatal(doc, "add_two_top: failed to pop operands");
     }
@@ -745,7 +758,9 @@ void add_two_top(yyjson_mut_doc *doc) {
     double val2 = (double)yyjson_mut_get_sint(val2_mut);
     double sum = val1 + val2;
     yyjson_mut_arr_add_real(doc, stack, sum);
-    record_patch_add_real(doc, "/stack/-", sum);
+    residual_group_add_patch_with_real(doc, group, "add", "/stack/-", sum);
+
+    if (group) residual_group_commit(doc, group);
 }
 
 // Custom function to replicate Python's `eval_code` for the example
