@@ -311,6 +311,7 @@ void process_functions(yyjson_mut_doc *doc, const jisp_instruction *instructions
 }
 
 int main(int argc, char **argv) {
+    (void)argc;
     // Load initial JSON from file provided as first command-line argument.
     const char *filename = argv[1];
     FILE *fp = fopen(filename, "rb");
