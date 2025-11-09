@@ -5,9 +5,10 @@ Understanding
 - Introduce a lightweight C token union to represent an instruction stream: tokens can be one of:
   - OP: a jisp_op function pointer
   - INT/REAL/STR: literal values
-  - JPM: a jpm_ptr monad; interpreter dereferences and deep-copies the pointed value into the doc, then pushes it (or may push a pointer handle per JPM integration)
+  - JPM: a const jpm_ptr* monad handle; interpreter pushes a shallow pointer handle (no deep copy) onto the pointer stack
 - Interpreter semantics:
   - Literal tokens push a corresponding yyjson value onto root["stack"].
+  - JPM tokens push a shallow pointer handle onto a C-side pointer stack managed by the interpreter.
   - OP tokens invoke the function with signature void jisp_op(yyjson_mut_doc *doc).
   - All op arguments are implicitly consumed from the top of root["stack"] (LIFO). Ops push results back on the stack when applicable.
 - Entry-point JSON (runtime-provided) remains supported:
@@ -23,13 +24,13 @@ API/Code changes
 
 2) Introduce token union and interpreter for C-authored sequences
    - enum jisp_tok_kind { JISP_TOK_OP, JISP_TOK_INT, JISP_TOK_REAL, JISP_TOK_STR, JISP_TOK_JPM };
-   - struct jisp_tok { kind; union { jisp_op op; int64_t i; double d; const char *s; jpm_ptr ptr; } as; };
+   - struct jisp_tok { kind; union { jisp_op op; int64_t i; double d; const char *s; const jpm_ptr *ptr; } as; };
    - void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count);
    - Behavior:
      - INT → yyjson_mut_arr_add_sint
      - REAL → yyjson_mut_arr_add_real
      - STR → duplicate into doc and push as string
-     - JPM → dereference jpm_ptr to a value; deep-copy into doc and push (or push pointer handle per JPM integration)
+     - JPM → push a shallow pointer handle (const jpm_ptr*) into a dedicated pointer stack; no deep copy
      - OP → call function
 
 3) Rewrite process_entrypoint(doc)
@@ -51,7 +52,7 @@ API/Code changes
      • add_block: INT 10, INT 20, OP add_two_top, STR "temp_sum", OP pop_and_store
      • duplicate_and_store_block: INT 50, OP duplicate_top, STR "temp_mult", OP pop_and_store
      • main_part2: INT 10, OP calculate_final_result
-   - Keep entrypoint backwards compatible for numbers and string op names; for inline op args use array form.
+   - Keep entrypoint backwards compatible for numbers and string op names.
 
 6) Error handling
    - If an op needs N args but fewer are on stack → jisp_fatal with descriptive message.
