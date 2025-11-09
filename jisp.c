@@ -64,7 +64,7 @@ static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const
 
 // Forward declarations
 struct jisp_instruction_t;
-void process_functions(yyjson_mut_doc *doc, const struct jisp_instruction_t *instructions, size_t count);
+void process_functions(yyjson_mut_doc *doc, struct jisp_instruction_t *instructions, size_t count);
 
 // JISP op function signature
 typedef void (*jisp_op)(yyjson_mut_doc *doc, yyjson_val *args);
@@ -72,7 +72,7 @@ typedef void (*jisp_op)(yyjson_mut_doc *doc, yyjson_val *args);
 // JISP instruction structure
 typedef struct jisp_instruction_t {
     jisp_op op;
-    const char *args_json; // JSON string for args, to be parsed
+    char *args_json; // JSON string for args, to be parsed
 } jisp_instruction;
 
 /* JISP op forward declarations for registry */
@@ -463,7 +463,7 @@ void print_json(yyjson_mut_doc *doc, yyjson_val *args) {
 
 
 // The processor
-void process_functions(yyjson_mut_doc *doc, const jisp_instruction *instructions, size_t count) {
+void process_functions(yyjson_mut_doc *doc, jisp_instruction *instructions, size_t count) {
     for (size_t i = 0; i < count; i++) {
         yyjson_doc *args_doc = NULL;
         yyjson_val *args = NULL;
@@ -789,7 +789,7 @@ int main(int argc, char **argv) {
     }
 
         // add_block
-    const jisp_instruction add_block[] = {
+    jisp_instruction add_block[] = {
         {push_value, "[10]"},
         {push_value, "[20]"},
         {add_two_top, NULL},
@@ -797,7 +797,7 @@ int main(int argc, char **argv) {
     };
 
     // duplicate_and_store_block
-    const jisp_instruction duplicate_and_store_block[] = {
+    jisp_instruction duplicate_and_store_block[] = {
         {push_value, "[50]"},
         {duplicate_top, NULL},
         {pop_and_store, "[\"temp_mult\"]"}
@@ -807,7 +807,7 @@ int main(int argc, char **argv) {
     process_functions(doc, add_block, sizeof(add_block)/sizeof(jisp_instruction));
     process_functions(doc, duplicate_and_store_block, sizeof(duplicate_and_store_block)/sizeof(jisp_instruction));
     
-    const jisp_instruction main_part2[] = {
+    jisp_instruction main_part2[] = {
         {push_value, "[10]"},
         {calculate_final_result, NULL}
     };
