@@ -5,6 +5,8 @@
     "final_result": 0,
     "entrypoint": [
         50, 56,
+        ["push_value", 6],
+        ["pop_and_store", "tempie"],
         "print_json"
     ],
     "user": {
