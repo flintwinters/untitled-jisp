@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <assert.h>
 #include "yyjson.h"
 
@@ -82,6 +83,76 @@ static void jpm_doc_release(yyjson_mut_doc *doc) {
     }
 }
 
+
+/* 
+   Simple JSON Pointer Monad (minimal step):
+   - Adds jpm_status, jpm_ptr struct, and helper functions.
+   - Implements a tiny jpm_return that only supports resolving the root path "/".
+   - Provides jpm_ptr_release to balance successful jpm_return retains.
+*/
+
+typedef enum jpm_status {
+    JPM_OK = 0,
+    JPM_ERR_INVALID_ARG,
+    JPM_ERR_NOT_FOUND,
+    JPM_ERR_TYPE,
+    JPM_ERR_RANGE,
+    JPM_ERR_INTERNAL
+} jpm_status;
+
+typedef struct jpm_ptr {
+    yyjson_mut_doc *doc;
+    yyjson_mut_val *val;
+    const char     *path; /* optional; not owned */
+} jpm_ptr;
+
+static bool jpm_is_valid(jpm_ptr p) {
+    return p.doc != NULL && p.val != NULL;
+}
+
+static const char *jpm_path(jpm_ptr p) {
+    return p.path;
+}
+
+static yyjson_mut_val *jpm_value(jpm_ptr p) {
+    return p.val;
+}
+
+/* Minimal resolver: only supports root path "/" for now. On success, retains the doc. */
+static jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *out) {
+    if (!out) return JPM_ERR_INVALID_ARG;
+    out->doc = NULL;
+    out->val = NULL;
+    out->path = NULL;
+
+    if (!doc || !rfc6901_path) return JPM_ERR_INVALID_ARG;
+
+    if (strcmp(rfc6901_path, "/") != 0) {
+        return JPM_ERR_NOT_FOUND;
+    }
+
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) {
+        return JPM_ERR_NOT_FOUND;
+    }
+
+    /* Retain document on success. */
+    jpm_doc_retain(doc);
+
+    out->doc = doc;
+    out->val = root;
+    out->path = rfc6901_path;
+    return JPM_OK;
+}
+
+/* Release handle; decrements doc refcount and clears fields. */
+static void jpm_ptr_release(jpm_ptr *p) {
+    if (!p || !p->doc) return;
+    jpm_doc_release(p->doc);
+    p->doc = NULL;
+    p->val = NULL;
+    p->path = NULL;
+}
 
 // Core "Opcodes"
 
@@ -241,7 +312,36 @@ int main(void) {
         assert((int64_t)yyjson_mut_get_int(ref_val) == 1);
     }
 
-    // add_block
+        // Minimal JPM tests
+        {
+            yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+            yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+            int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
+
+            // Not found path should not change refcount
+            jpm_ptr p_bad;
+            jpm_status st_bad = jpm_return(doc, "/nope", &p_bad);
+            assert(st_bad == JPM_ERR_NOT_FOUND);
+            ref_val = yyjson_mut_obj_get(root_local, "ref");
+            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+
+            // Root path "/" should work and retain
+            jpm_ptr p_root;
+            jpm_status st = jpm_return(doc, "/", &p_root);
+            assert(st == JPM_OK);
+            assert(jpm_is_valid(p_root));
+            assert(jpm_value(p_root) == root_local);
+
+            ref_val = yyjson_mut_obj_get(root_local, "ref");
+            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before + 1);
+
+            // Release should decrement back
+            jpm_ptr_release(&p_root);
+            ref_val = yyjson_mut_obj_get(root_local, "ref");
+            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+        }
+
+        // add_block
     const jisp_instruction add_block[] = {
         {push_value, "[10]"},
         {push_value, "[20]"},
