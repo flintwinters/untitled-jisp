@@ -62,42 +62,54 @@ static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const
     exit(1);
 }
 
-// Forward declarations
-struct jisp_instruction_t;
-void process_functions(yyjson_mut_doc *doc, struct jisp_instruction_t *instructions, size_t count);
+/* JISP op function signature (no explicit args) */
+typedef void (*jisp_op)(yyjson_mut_doc *doc);
 
-// JISP op function signature
-typedef void (*jisp_op)(yyjson_mut_doc *doc, yyjson_val *args);
+/* Forward declare jpm_ptr for token union pointer kind. */
+typedef struct jpm_ptr jpm_ptr;
 
-// JISP instruction structure
-typedef struct jisp_instruction_t {
-    jisp_op op;
-    char *args_json; // JSON string for args, to be parsed
-} jisp_instruction;
+/* Token stream types and interpreter */
+typedef enum jisp_tok_kind {
+    JISP_TOK_OP,
+    JISP_TOK_INT,
+    JISP_TOK_REAL,
+    JISP_TOK_STR,
+    JISP_TOK_JPM
+} jisp_tok_kind;
+
+typedef struct jisp_tok {
+    jisp_tok_kind kind;
+    union {
+        jisp_op op;
+        int64_t i;
+        double d;
+        const char *s;
+        const jpm_ptr *ptr;
+    } as;
+} jisp_tok;
+
+static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count);
 
 /* JISP op forward declarations for registry */
-void push_value(yyjson_mut_doc *doc, yyjson_val *args);
-void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args);
-void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args);
-void add_two_top(yyjson_mut_doc *doc, yyjson_val *args);
-void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args);
-void print_json(yyjson_mut_doc *doc, yyjson_val *args);
+void pop_and_store(yyjson_mut_doc *doc);
+void duplicate_top(yyjson_mut_doc *doc);
+void add_two_top(yyjson_mut_doc *doc);
+void calculate_final_result(yyjson_mut_doc *doc);
+void print_json(yyjson_mut_doc *doc);
 
 /* Global JISP op registry (JSON document) */
 typedef enum jisp_op_id {
-    JISP_OP_PUSH_VALUE = 1,
-    JISP_OP_POP_AND_STORE = 2,
-    JISP_OP_DUPLICATE_TOP = 3,
-    JISP_OP_ADD_TWO_TOP = 4,
-    JISP_OP_CALCULATE_FINAL_RESULT = 5,
-    JISP_OP_PRINT_JSON = 6
+    JISP_OP_POP_AND_STORE = 1,
+    JISP_OP_DUPLICATE_TOP = 2,
+    JISP_OP_ADD_TWO_TOP = 3,
+    JISP_OP_CALCULATE_FINAL_RESULT = 4,
+    JISP_OP_PRINT_JSON = 5
 } jisp_op_id;
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
 
 static jisp_op jisp_op_from_id(int id) {
     switch (id) {
-        case JISP_OP_PUSH_VALUE: return push_value;
         case JISP_OP_POP_AND_STORE: return pop_and_store;
         case JISP_OP_DUPLICATE_TOP: return duplicate_top;
         case JISP_OP_ADD_TWO_TOP: return add_two_top;
@@ -112,7 +124,6 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_doc *d = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(d);
     yyjson_mut_doc_set_root(d, root);
-    yyjson_mut_obj_add_int(d, root, "push_value", JISP_OP_PUSH_VALUE);
     yyjson_mut_obj_add_int(d, root, "pop_and_store", JISP_OP_POP_AND_STORE);
     yyjson_mut_obj_add_int(d, root, "duplicate_top", JISP_OP_DUPLICATE_TOP);
     yyjson_mut_obj_add_int(d, root, "add_two_top", JISP_OP_ADD_TWO_TOP);
@@ -323,42 +334,25 @@ static jpm_status jpm_check_path_is_root(jpm_ptr in, void *ctx) {
 
 // Core "Opcodes"
 
-void push_value(yyjson_mut_doc *doc, yyjson_val *args) {
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (!stack || !yyjson_mut_is_arr(stack)) {
-        jisp_fatal(doc, "push_value: missing or non-array 'stack'");
-    }
-    if (!args || !yyjson_is_arr(args)) {
-        jisp_fatal(doc, "push_value: args must be a JSON array");
-    }
-    yyjson_val *value_to_push = yyjson_arr_get_first(args);
-    if (!value_to_push) {
-        jisp_fatal(doc, "push_value: args array is empty");
-    }
-    yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, value_to_push));
-}
 
-void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args) {
+void pop_and_store(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (!stack || !yyjson_mut_is_arr(stack)) {
         jisp_fatal(doc, "pop_and_store: missing or non-array 'stack'");
     }
-    if (!args || !yyjson_is_arr(args)) {
-        jisp_fatal(doc, "pop_and_store: args must be a JSON array");
-    }
-    yyjson_val *key_val = yyjson_arr_get_first(args);
-    if (!key_val || !yyjson_is_str(key_val)) {
-        jisp_fatal(doc, "pop_and_store: first arg must be a string key");
-    }
-    if (yyjson_mut_arr_size(stack) == 0) {
-        jisp_fatal(doc, "pop_and_store: stack is empty");
+    if (yyjson_mut_arr_size(stack) < 2) {
+        jisp_fatal(doc, "pop_and_store: need at least [value, key] on stack");
     }
 
-    const char *key = yyjson_get_str(key_val);
+    yyjson_mut_val *key_val_mut = yyjson_mut_arr_remove_last(stack);
+    if (!yyjson_is_str((yyjson_val *)key_val_mut)) {
+        jisp_fatal(doc, "pop_and_store: key must be a string");
+    }
+    const char *key = yyjson_get_str((yyjson_val *)key_val_mut);
     size_t key_len = strlen(key);
     char *key_in_doc = unsafe_yyjson_mut_strncpy(doc, key, key_len);
+
     yyjson_mut_val *value = yyjson_mut_arr_remove_last(stack);
     if (!value || !key_in_doc) {
         jisp_fatal(doc, "pop_and_store: failed to pop value or duplicate key");
@@ -366,8 +360,7 @@ void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_obj_add_val(doc, root, key_in_doc, value);
 }
 
-void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args;
+void duplicate_top(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (!stack || !yyjson_mut_is_arr(stack)) {
@@ -386,8 +379,7 @@ void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)last));
 }
 
-void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args;
+void add_two_top(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (!stack || !yyjson_mut_is_arr(stack)) {
@@ -412,8 +404,7 @@ void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
 }
 
 // Custom function to replicate Python's `eval_code` for the example
-void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args;
+void calculate_final_result(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
 
     yyjson_mut_val *temp_sum_val = yyjson_mut_obj_get(root, "temp_sum");
@@ -452,7 +443,7 @@ void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_mut_obj_add_real(doc, root, "final_result", final_result);
 }
 
-void print_json(yyjson_mut_doc *doc, yyjson_val *args) {
+void print_json(yyjson_mut_doc *doc) {
     yyjson_write_err err;
     char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, &err);
     if (json_str) {
@@ -462,29 +453,41 @@ void print_json(yyjson_mut_doc *doc, yyjson_val *args) {
 }
 
 
-// The processor
-void process_functions(yyjson_mut_doc *doc, jisp_instruction *instructions, size_t count) {
+/* Token interpreter */
+static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) {
+    if (!doc || !toks) return;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+    if (!stack || !yyjson_mut_is_arr(stack)) {
+        jisp_fatal(doc, "run_tokens: missing or non-array 'stack'");
+    }
+
     for (size_t i = 0; i < count; i++) {
-        yyjson_doc *args_doc = NULL;
-        yyjson_val *args = NULL;
-        if (instructions[i].args_json) {
-            yyjson_read_err rerr;
-            args_doc = yyjson_read_opts(instructions[i].args_json, strlen(instructions[i].args_json), 0, NULL, &rerr);
-            if (!args_doc) {
-                jisp_fatal_parse(doc, "instruction args", instructions[i].args_json, strlen(instructions[i].args_json), rerr.pos, "Failed to parse instruction args at index %zu: %s", i, rerr.msg ? rerr.msg : "unknown");
-            }
-            args = yyjson_doc_get_root(args_doc);
-        }
-        
-        instructions[i].op(doc, args);
-        
-        if (args_doc) {
-            yyjson_doc_free(args_doc);
+        jisp_tok t = toks[i];
+        switch (t.kind) {
+            case JISP_TOK_INT:
+                yyjson_mut_arr_add_sint(doc, stack, t.as.i);
+                break;
+            case JISP_TOK_REAL:
+                yyjson_mut_arr_add_real(doc, stack, t.as.d);
+                break;
+            case JISP_TOK_STR:
+                yyjson_mut_arr_add_strcpy(doc, stack, t.as.s ? t.as.s : "");
+                break;
+            case JISP_TOK_JPM:
+                jisp_fatal(doc, "JPM tokens not yet supported in run_tokens");
+                break;
+            case JISP_TOK_OP:
+                if (!t.as.op) jisp_fatal(doc, "NULL op in token stream at index %zu", i);
+                t.as.op(doc);
+                break;
+            default:
+                jisp_fatal(doc, "Unknown token kind at index %zu", i);
         }
     }
 }
 
-/* Build and execute instructions from root["entrypoint"] string array */
+/* Process entrypoint: strings → ops, numbers/arrays → push literals onto stack */
 static void process_entrypoint(yyjson_mut_doc *doc) {
     if (!doc) return;
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
@@ -492,81 +495,36 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
     if (!ep) return;
     if (!yyjson_mut_is_arr(ep)) {
-        jisp_fatal(doc, "entrypoint must be an array of strings, numbers, or arrays");
+        jisp_fatal(doc, "entrypoint must be an array");
     }
 
-    size_t cap = yyjson_mut_arr_size(ep);
-    if (cap == 0) return;
+    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+    if (!stack || !yyjson_mut_is_arr(stack)) {
+        jisp_fatal(doc, "process_entrypoint: missing or non-array 'stack'");
+    }
 
-    jisp_instruction *ins = (jisp_instruction *)malloc(sizeof(jisp_instruction) * cap);
-    if (!ins) jisp_fatal(doc, "Out of memory allocating instruction buffer for %zu items", cap);
-
-    size_t cnt = 0;
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
+    if (!yyjson_mut_arr_iter_init(ep, &it)) return;
 
-    if (!yyjson_mut_arr_iter_init(ep, &it)) {
-        free(ins);
-        return;
-    }
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
         if (yyjson_mut_is_str(elem)) {
             const char *name = yyjson_get_str((yyjson_val *)elem);
             jisp_op op = jisp_op_registry_get(name);
-            if (op) {
-                ins[cnt].op = op;
-                ins[cnt].args_json = NULL;
-                cnt++;
-            } else {
+            if (!op) {
                 jisp_fatal(doc, "Unknown entrypoint op: %s", name ? name : "(null)");
             }
+            op(doc);
         } else if (yyjson_is_num((yyjson_val *)elem)) {
-            /* Numeric literal: translate to push_value with inline JSON args like "[50]" */
-            double v = yyjson_get_int((yyjson_val *)elem);
-            char buf[64];
-            int n = snprintf(buf, sizeof(buf), "[%.17g]", v);
-            if (n > 0) {
-                char *dup = (char *)malloc((size_t)n + 1);
-                if (dup) {
-                    memcpy(dup, buf, (size_t)n + 1);
-                    ins[cnt].op = push_value;
-                    ins[cnt].args_json = dup;
-                    cnt++;
-                }
-            }
+            /* Push number literal by deep-copy */
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
         } else if (yyjson_mut_is_arr(elem)) {
-            /* Treat arrays as literal values: push the array onto the stack. */
-            yyjson_mut_doc *adoc = yyjson_mut_doc_new(NULL);
-            if (!adoc) {
-                jisp_fatal(doc, "allocation failed building array literal");
-            }
-            yyjson_mut_val *outer = yyjson_mut_arr(adoc);
-            yyjson_mut_doc_set_root(adoc, outer);
-            yyjson_mut_arr_append(outer, yyjson_val_mut_copy(adoc, (yyjson_val *)elem));
-
-            yyjson_write_err werr;
-            char *args_str = yyjson_mut_write_opts(adoc, 0, NULL, NULL, &werr);
-            yyjson_mut_doc_free(adoc);
-            if (!args_str) {
-                jisp_fatal(doc, "failed to serialize array literal: %s", werr.msg ? werr.msg : "unknown");
-            }
-
-            ins[cnt].op = push_value;
-            ins[cnt].args_json = args_str;
-            cnt++;
+            /* Push array literal by deep-copy */
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
         } else {
-            jisp_fatal(doc, "entrypoint element at index %zu is not a string, number, or array", cnt);
+            jisp_fatal(doc, "entrypoint element is not a string, number, or array");
         }
     }
-
-    if (cnt > 0) {
-        process_functions(doc, ins, cnt);
-    }
-
-    for (size_t i = 0; i < cnt; i++) {
-        if (ins[i].args_json) free((void *)ins[i].args_json);
-    }
-    free(ins);
 }
 
 int main(int argc, char **argv) {
@@ -768,29 +726,31 @@ int main(int argc, char **argv) {
     }
 
         // add_block
-    jisp_instruction add_block[] = {
-        {push_value, "[10]"},
-        {push_value, "[20]"},
-        {add_two_top, NULL},
-        {pop_and_store, "[\"temp_sum\"]"}
+    jisp_tok add_block[] = {
+        {JISP_TOK_INT, .as.i = 10},
+        {JISP_TOK_INT, .as.i = 20},
+        {JISP_TOK_OP, .as.op = add_two_top},
+        {JISP_TOK_STR, .as.s = "temp_sum"},
+        {JISP_TOK_OP, .as.op = pop_and_store}
     };
 
     // duplicate_and_store_block
-    jisp_instruction duplicate_and_store_block[] = {
-        {push_value, "[50]"},
-        {duplicate_top, NULL},
-        {pop_and_store, "[\"temp_mult\"]"}
+    jisp_tok duplicate_and_store_block[] = {
+        {JISP_TOK_INT, .as.i = 50},
+        {JISP_TOK_OP, .as.op = duplicate_top},
+        {JISP_TOK_STR, .as.s = "temp_mult"},
+        {JISP_TOK_OP, .as.op = pop_and_store}
     };
 
     // main_function_list from Python script is executed here
-    process_functions(doc, add_block, sizeof(add_block)/sizeof(jisp_instruction));
-    process_functions(doc, duplicate_and_store_block, sizeof(duplicate_and_store_block)/sizeof(jisp_instruction));
+    run_tokens(doc, add_block, sizeof(add_block)/sizeof(add_block[0]));
+    run_tokens(doc, duplicate_and_store_block, sizeof(duplicate_and_store_block)/sizeof(duplicate_and_store_block[0]));
     
-    jisp_instruction main_part2[] = {
-        {push_value, "[10]"},
-        {calculate_final_result, NULL}
+    jisp_tok main_part2[] = {
+        {JISP_TOK_INT, .as.i = 10},
+        {JISP_TOK_OP, .as.op = calculate_final_result}
     };
-    process_functions(doc, main_part2, sizeof(main_part2)/sizeof(jisp_instruction));
+    run_tokens(doc, main_part2, sizeof(main_part2)/sizeof(main_part2[0]));
 
     process_entrypoint(doc);
     yyjson_mut_doc_free(doc);
