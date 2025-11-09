@@ -16,16 +16,24 @@ typedef struct jisp_ctx {
 
 static jisp_ctx g_jisp_ctx = {0};
 
+/* jisp_json_to_pretty_string: Produces a pretty-printed JSON string for diagnostics or user output; use wherever the doc needs to be serialized for display. */
+static char *jisp_json_to_pretty_string(yyjson_mut_doc *doc) {
+    if (!doc) return NULL;
+    yyjson_write_err err;
+    return yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, &err);
+}
+
+/* jisp_dump_state: Emits a labeled snapshot of the current JSON state for debugging; call from error paths to aid investigation. */
 static void jisp_dump_state(yyjson_mut_doc *doc) {
     if (!doc) return;
-    yyjson_write_err err;
-    char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, &err);
+    char *json_str = jisp_json_to_pretty_string(doc);
     if (json_str) {
         fprintf(stderr, "\n---- JSON State Snapshot ----\n%s\n-----------------------------\n", json_str);
         free(json_str);
     }
 }
 
+/* jisp_report_pos: Reports a human-friendly location for parse errors; use when surfacing input JSON diagnostics. */
 static void jisp_report_pos(const char *source_name, const char *src, size_t len, size_t pos) {
     if (!src || len == 0) {
         fprintf(stderr, "%s: at byte %zu (source unknown)\n", source_name ? source_name : "source", pos);
@@ -39,6 +47,7 @@ static void jisp_report_pos(const char *source_name, const char *src, size_t len
     }
 }
 
+/* jisp_fatal: Centralized fatal error handler that also snapshots state; use to abort on unrecoverable conditions. */
 static void jisp_fatal(yyjson_mut_doc *doc, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -50,6 +59,7 @@ static void jisp_fatal(yyjson_mut_doc *doc, const char *fmt, ...) {
     exit(1);
 }
 
+/* jisp_fatal_parse: Reports a parse-time fatal error with location and state; use for input JSON parsing failures. */
 static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const char *src, size_t len, size_t pos, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -60,6 +70,24 @@ static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const
     jisp_report_pos(source_name, src, len, pos);
     jisp_dump_state(doc);
     exit(1);
+}
+
+/* get_root_or_fatal: Ensures the document has a root value; use in ops and interpreters that require a valid root object. */
+static yyjson_mut_val *get_root_or_fatal(yyjson_mut_doc *doc, const char *ctx) {
+    if (!doc) jisp_fatal(NULL, "%s: null document", ctx ? ctx : "operation");
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) jisp_fatal(doc, "%s: missing root", ctx ? ctx : "operation");
+    return root;
+}
+
+/* get_stack_or_fatal: Fetches root["stack"] as an array; use when an operation requires a well-formed stack. */
+static yyjson_mut_val *get_stack_or_fatal(yyjson_mut_doc *doc, const char *ctx) {
+    yyjson_mut_val *root = get_root_or_fatal(doc, ctx);
+    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+    if (!stack || !yyjson_mut_is_arr(stack)) {
+        jisp_fatal(doc, "%s: missing or non-array 'stack'", ctx ? ctx : "operation");
+    }
+    return stack;
 }
 
 /* JISP op function signature (no explicit args) */
@@ -544,15 +572,14 @@ static void record_patch_remove(yyjson_mut_doc *doc, const char *path) {
     yyjson_mut_arr_append(res, patch);
 }
 
-// Core "Opcodes"
+/* Core "Opcodes" */
 
 
+// 
+/* pop_and_store: Stores a value under a key from the stack into the document; use when a [value, key] pair has been prepared on the stack. */
 void pop_and_store(yyjson_mut_doc *doc) {
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (!stack || !yyjson_mut_is_arr(stack)) {
-        jisp_fatal(doc, "pop_and_store: missing or non-array 'stack'");
-    }
+    yyjson_mut_val *root = get_root_or_fatal(doc, "pop_and_store");
+    yyjson_mut_val *stack = get_stack_or_fatal(doc, "pop_and_store");
     if (yyjson_mut_arr_size(stack) < 2) {
         jisp_fatal(doc, "pop_and_store: need at least [value, key] on stack");
     }
@@ -582,12 +609,9 @@ void pop_and_store(yyjson_mut_doc *doc) {
     }
 }
 
+/* duplicate_top: Duplicates the top stack value to model a pure stack operation; use to preserve and copy the current top. */
 void duplicate_top(yyjson_mut_doc *doc) {
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (!stack || !yyjson_mut_is_arr(stack)) {
-        jisp_fatal(doc, "duplicate_top: missing or non-array 'stack'");
-    }
+    yyjson_mut_val *stack = get_stack_or_fatal(doc, "duplicate_top");
     if (yyjson_mut_arr_size(stack) == 0) {
         jisp_fatal(doc, "duplicate_top: stack is empty");
     }
@@ -603,12 +627,9 @@ void duplicate_top(yyjson_mut_doc *doc) {
     record_patch_add_val(doc, "/stack/-", last);
 }
 
+/* add_two_top: Adds the two topmost numeric values and pushes the sum; use for simple arithmetic over the stack. */
 void add_two_top(yyjson_mut_doc *doc) {
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (!stack || !yyjson_mut_is_arr(stack)) {
-        jisp_fatal(doc, "add_two_top: missing or non-array 'stack'");
-    }
+    yyjson_mut_val *stack = get_stack_or_fatal(doc, "add_two_top");
     if (yyjson_mut_arr_size(stack) < 2) {
         jisp_fatal(doc, "add_two_top: need at least two values on stack");
     }
@@ -631,6 +652,7 @@ void add_two_top(yyjson_mut_doc *doc) {
 }
 
 // Custom function to replicate Python's `eval_code` for the example
+/* calculate_final_result: Aggregates intermediate fields and optional stack top into final_result; use as a terminal computation step. */
 void calculate_final_result(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
 
@@ -677,15 +699,16 @@ void calculate_final_result(yyjson_mut_doc *doc) {
     }
 }
 
+/* print_json: Displays the current document contents; use at the end of execution or for user-facing inspection. */
 void print_json(yyjson_mut_doc *doc) {
-    yyjson_write_err err;
-    char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, &err);
+    char *json_str = jisp_json_to_pretty_string(doc);
     if (json_str) {
         printf("%s\n", json_str);
         free(json_str);
     }
 }
 
+/* undo_last_residual: Best-effort undo for the last minimal residual log entry; use for experimentation until full inversion exists. */
 void undo_last_residual(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     if (!root) {
@@ -730,14 +753,10 @@ void undo_last_residual(yyjson_mut_doc *doc) {
 }
 
 
-/* Token interpreter */
+/* run_tokens: Executes a sequence of tokens against the JSON stack; use to run small programs where ops manipulate root["stack"]. */
 static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) {
     if (!doc || !toks) return;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (!stack || !yyjson_mut_is_arr(stack)) {
-        jisp_fatal(doc, "run_tokens: missing or non-array 'stack'");
-    }
+    yyjson_mut_val *stack = get_stack_or_fatal(doc, "run_tokens");
 
     for (size_t i = 0; i < count; i++) {
         jisp_tok t = toks[i];
@@ -764,20 +783,14 @@ static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) 
     }
 }
 
-/* Process a generic "entrypoint-like" array with the same semantics. */
+/* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
 static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
     if (!doc || !ep) return;
     if (!yyjson_mut_is_arr(ep)) {
         jisp_fatal(doc, "entrypoint must be an array");
     }
 
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    if (!root) return;
-
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (!stack || !yyjson_mut_is_arr(stack)) {
-        jisp_fatal(doc, "process_entrypoint: missing or non-array 'stack'");
-    }
+    yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_entrypoint");
 
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
@@ -826,7 +839,7 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
     }
 }
 
-/* Process entrypoint: strings → ops, numbers/arrays → push literals onto stack */
+/* process_entrypoint: Top-level driver for entrypoint arrays; use to seed the stack from initial program data and nested directives. */
 static void process_entrypoint(yyjson_mut_doc *doc) {
     if (!doc) return;
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
@@ -836,6 +849,7 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     process_ep_array(doc, ep);
 }
 
+/* main: Orchestrates program flow from input file to execution and output; run as the CLI entry point. */
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s test.json\n", argv[0]);
