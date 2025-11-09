@@ -19,6 +19,69 @@ typedef struct jisp_instruction_t {
     const char *args_json; // JSON string for args, to be parsed
 } jisp_instruction;
 
+/* JISP op forward declarations for registry */
+void push_value(yyjson_mut_doc *doc, yyjson_val *args);
+void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args);
+void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args);
+void add_two_top(yyjson_mut_doc *doc, yyjson_val *args);
+void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args);
+void print_json(yyjson_mut_doc *doc, yyjson_val *args);
+
+/* Global JISP op registry (JSON document) */
+typedef enum jisp_op_id {
+    JISP_OP_PUSH_VALUE = 1,
+    JISP_OP_POP_AND_STORE = 2,
+    JISP_OP_DUPLICATE_TOP = 3,
+    JISP_OP_ADD_TWO_TOP = 4,
+    JISP_OP_CALCULATE_FINAL_RESULT = 5,
+    JISP_OP_PRINT_JSON = 6
+} jisp_op_id;
+
+static yyjson_mut_doc *g_jisp_op_registry = NULL;
+
+static jisp_op jisp_op_from_id(int id) {
+    switch (id) {
+        case JISP_OP_PUSH_VALUE: return push_value;
+        case JISP_OP_POP_AND_STORE: return pop_and_store;
+        case JISP_OP_DUPLICATE_TOP: return duplicate_top;
+        case JISP_OP_ADD_TWO_TOP: return add_two_top;
+        case JISP_OP_CALCULATE_FINAL_RESULT: return calculate_final_result;
+        case JISP_OP_PRINT_JSON: return print_json;
+        default: return NULL;
+    }
+}
+
+static void jisp_op_registry_init(void) {
+    if (g_jisp_op_registry) return;
+    yyjson_mut_doc *d = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(d);
+    yyjson_mut_doc_set_root(d, root);
+    yyjson_mut_obj_add_int(d, root, "push_value", JISP_OP_PUSH_VALUE);
+    yyjson_mut_obj_add_int(d, root, "pop_and_store", JISP_OP_POP_AND_STORE);
+    yyjson_mut_obj_add_int(d, root, "duplicate_top", JISP_OP_DUPLICATE_TOP);
+    yyjson_mut_obj_add_int(d, root, "add_two_top", JISP_OP_ADD_TWO_TOP);
+    yyjson_mut_obj_add_int(d, root, "calculate_final_result", JISP_OP_CALCULATE_FINAL_RESULT);
+    yyjson_mut_obj_add_int(d, root, "print_json", JISP_OP_PRINT_JSON);
+    g_jisp_op_registry = d;
+}
+
+static void jisp_op_registry_free(void) {
+    if (g_jisp_op_registry) {
+        yyjson_mut_doc_free(g_jisp_op_registry);
+        g_jisp_op_registry = NULL;
+    }
+}
+
+/* Optional helper: fetch op by name from registry */
+static jisp_op jisp_op_registry_get(const char *name) {
+    if (!g_jisp_op_registry || !name) return NULL;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(g_jisp_op_registry);
+    yyjson_mut_val *idv = yyjson_mut_obj_get(root, name);
+    if (!idv) return NULL;
+    int id = yyjson_mut_get_int(idv);
+    return jisp_op_from_id(id);
+}
+
 /*
     Incremental change step 1:
     - Add internal helpers to manage a root-level "ref" field on yyjson_mut_doc.
@@ -315,6 +378,8 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Usage: %s test.json\n", argv[0]);
         return 1;
     }
+    /* Initialize global JISP op registry (JSON doc) */
+    jisp_op_registry_init();
     // Load initial JSON from file provided as first command-line argument.
     const char *filename = argv[1];
     FILE *fp = fopen(filename, "rb");
@@ -511,5 +576,6 @@ int main(int argc, char **argv) {
 
     print_json(doc, NULL);
     yyjson_mut_doc_free(doc);
+    jisp_op_registry_free();
     return 0;
 }
