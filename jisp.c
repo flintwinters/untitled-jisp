@@ -381,7 +381,7 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
     if (!ep) return;
     if (!yyjson_mut_is_arr(ep)) {
-        fprintf(stderr, "entrypoint must be an array of strings or numbers\n");
+        fprintf(stderr, "entrypoint must be an array of strings, numbers, or arrays\n");
         return;
     }
 
@@ -424,6 +424,52 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
                     cnt++;
                 }
             }
+        } else if (yyjson_mut_is_arr(elem)) {
+            /* Array form: ["op_name", ...args]
+               - First element must be string op name
+               - Remaining elements become the args JSON array */
+            yyjson_mut_arr_iter it2;
+            if (!yyjson_mut_arr_iter_init(elem, &it2)) {
+                fprintf(stderr, "entrypoint array init failed at index %zu\n", cnt);
+                continue;
+            }
+            yyjson_mut_val *first = yyjson_mut_arr_iter_next(&it2);
+            if (!first || !yyjson_mut_is_str(first)) {
+                fprintf(stderr, "entrypoint array missing string op name at index %zu\n", cnt);
+                continue;
+            }
+            const char *op_name = yyjson_get_str((yyjson_val *)first);
+            jisp_op op = jisp_op_registry_get(op_name);
+            if (!op) {
+                fprintf(stderr, "Unknown entrypoint op: %s\n", op_name ? op_name : "(null)");
+                continue;
+            }
+
+            /* Build args JSON by copying remaining elements into a temp doc array and writing it */
+            yyjson_mut_doc *adoc = yyjson_mut_doc_new(NULL);
+            if (!adoc) {
+                fprintf(stderr, "allocation failed building args for %s\n", op_name);
+                continue;
+            }
+            yyjson_mut_val *arr = yyjson_mut_arr(adoc);
+            yyjson_mut_doc_set_root(adoc, arr);
+
+            yyjson_mut_val *sub;
+            while ((sub = yyjson_mut_arr_iter_next(&it2))) {
+                yyjson_mut_arr_append(arr, yyjson_val_mut_copy(adoc, (yyjson_val *)sub));
+            }
+
+            yyjson_write_err werr;
+            char *args_str = yyjson_mut_write_opts(adoc, 0, NULL, NULL, &werr);
+            yyjson_mut_doc_free(adoc);
+            if (!args_str) {
+                fprintf(stderr, "failed to serialize args for %s: %s\n", op_name, werr.msg ? werr.msg : "unknown");
+                continue;
+            }
+
+            ins[cnt].op = op;
+            ins[cnt].args_json = args_str;
+            cnt++;
         } else {
             fprintf(stderr, "entrypoint element at index %zu is not a string or number\n", cnt);
         }
