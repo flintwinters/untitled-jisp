@@ -442,9 +442,9 @@ int main(void) {
             yyjson_mut_obj_add_int(doc, profile, "x~y", 2);  /* requires ~0 decoding */
 
             yyjson_mut_val *nums = yyjson_mut_arr(doc);
-            yyjson_mut_arr_add_real(doc, nums, 7);
-            yyjson_mut_arr_add_real(doc, nums, 8);
-            yyjson_mut_arr_add_real(doc, nums, 9);
+            yyjson_mut_arr_add_int(doc, nums, 7);
+            yyjson_mut_arr_add_int(doc, nums, 8);
+            yyjson_mut_arr_add_int(doc, nums, 9);
             yyjson_mut_obj_add_val(doc, root_local, "nums", nums);
 
             yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
