@@ -373,6 +373,55 @@ void process_functions(yyjson_mut_doc *doc, const jisp_instruction *instructions
     }
 }
 
+/* Build and execute instructions from root["entrypoint"] string array */
+static void process_entrypoint(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return;
+    yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
+    if (!ep) return;
+    if (!yyjson_mut_is_arr(ep)) {
+        fprintf(stderr, "entrypoint must be an array of strings\n");
+        return;
+    }
+
+    size_t cap = yyjson_mut_arr_size(ep);
+    if (cap == 0) return;
+
+    jisp_instruction *ins = (jisp_instruction *)malloc(sizeof(jisp_instruction) * cap);
+    if (!ins) return;
+
+    size_t cnt = 0;
+    yyjson_mut_arr_iter it;
+    yyjson_mut_val *elem;
+
+    if (!yyjson_mut_arr_iter_init(ep, &it)) {
+        free(ins);
+        return;
+    }
+    while ((elem = yyjson_mut_arr_iter_next(&it))) {
+        if (yyjson_mut_is_str(elem)) {
+            const char *name = yyjson_get_str((yyjson_val *)elem);
+            jisp_op op = jisp_op_registry_get(name);
+            if (op) {
+                ins[cnt].op = op;
+                ins[cnt].args_json = NULL;
+                cnt++;
+            } else {
+                fprintf(stderr, "Unknown entrypoint op: %s\n", name ? name : "(null)");
+            }
+        } else {
+            fprintf(stderr, "entrypoint element at index %zu is not a string\n", cnt);
+        }
+    }
+
+    if (cnt > 0) {
+        process_functions(doc, ins, cnt);
+    }
+
+    free(ins);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s test.json\n", argv[0]);
