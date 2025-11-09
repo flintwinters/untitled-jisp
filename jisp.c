@@ -118,7 +118,7 @@ static yyjson_mut_val *jpm_value(jpm_ptr p) {
     return p.val;
 }
 
-/* Minimal resolver: supports "/" and single-segment "/token" from root. Retains the doc on success. */
+/* Resolver using yyjson's JSON Pointer utilities. Supports full RFC 6901. Retains the doc on success. */
 static jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *out) {
     if (!out) return JPM_ERR_INVALID_ARG;
     out->doc = NULL;
@@ -138,55 +138,15 @@ static jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_
         return JPM_OK;
     }
 
-    /* Only handle single segment: "/name" or "/index". */
-    if (rfc6901_path[0] != '/' || rfc6901_path[1] == '\0') {
+    /* Use yyjson's pointer resolver to avoid reimplementing RFC 6901. */
+    yyjson_mut_val *val = yyjson_mut_ptr_get(root, rfc6901_path);
+    if (!val) {
         return JPM_ERR_NOT_FOUND;
     }
-    const char *seg_start = rfc6901_path + 1;
-    const char *slash = strchr(seg_start, '/');
-    if (slash && slash[0] != '\0') {
-        /* Multi-segment not supported yet. */
-        return JPM_ERR_NOT_FOUND;
-    }
-    size_t seg_len = slash ? (size_t)(slash - seg_start) : strlen(seg_start);
 
-    yyjson_mut_val *target = NULL;
-
-    if (yyjson_mut_is_obj(root)) {
-        /* Copy segment to temporary buffer to NUL-terminate for lookup. */
-        char *key = (char *)malloc(seg_len + 1);
-        if (!key) return JPM_ERR_INTERNAL;
-        memcpy(key, seg_start, seg_len);
-        key[seg_len] = '\0';
-        target = yyjson_mut_obj_get(root, key);
-        free(key);
-        if (!target) return JPM_ERR_NOT_FOUND;
-    } else if (yyjson_mut_is_arr(root)) {
-        /* Parse array index. */
-        char *buf = (char *)malloc(seg_len + 1);
-        if (!buf) return JPM_ERR_INTERNAL;
-        memcpy(buf, seg_start, seg_len);
-        buf[seg_len] = '\0';
-        char *endp = NULL;
-        long idx_l = strtol(buf, &endp, 10);
-        free(buf);
-        if (!endp || *endp != '\0' || idx_l < 0) return JPM_ERR_INVALID_ARG;
-        size_t idx = (size_t)idx_l;
-        size_t len = unsafe_yyjson_get_len(root);
-        if (idx >= len) return JPM_ERR_RANGE;
-        yyjson_val *cur = unsafe_yyjson_get_first((yyjson_val *)root);
-        for (size_t i = 0; i < idx; i++) {
-            cur = unsafe_yyjson_get_next(cur);
-        }
-        target = (yyjson_mut_val *)cur;
-    } else {
-        return JPM_ERR_TYPE;
-    }
-
-    /* Retain document on success. */
     jpm_doc_retain(doc);
     out->doc = doc;
-    out->val = target;
+    out->val = val;
     out->path = rfc6901_path;
     return JPM_OK;
 }
