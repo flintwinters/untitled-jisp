@@ -574,7 +574,7 @@ int main(int argc, char **argv) {
     };
     process_functions(doc, main_part2, sizeof(main_part2)/sizeof(jisp_instruction));
 
-    print_json(doc, NULL);
+    process_entrypoint(doc);
     yyjson_mut_doc_free(doc);
     jisp_op_registry_free();
     return 0;
