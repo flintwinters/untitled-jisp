@@ -410,8 +410,22 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
             } else {
                 fprintf(stderr, "Unknown entrypoint op: %s\n", name ? name : "(null)");
             }
+        } else if (yyjson_is_num((yyjson_val *)elem)) {
+            /* Numeric literal: translate to push_value with inline JSON args like "[50]" */
+            double v = yyjson_get_real((yyjson_val *)elem);
+            char buf[64];
+            int n = snprintf(buf, sizeof(buf), "[%.17g]", v);
+            if (n > 0) {
+                char *dup = (char *)malloc((size_t)n + 1);
+                if (dup) {
+                    memcpy(dup, buf, (size_t)n + 1);
+                    ins[cnt].op = push_value;
+                    ins[cnt].args_json = dup;
+                    cnt++;
+                }
+            }
         } else {
-            fprintf(stderr, "entrypoint element at index %zu is not a string\n", cnt);
+            fprintf(stderr, "entrypoint element at index %zu is not a string or number\n", cnt);
         }
     }
 
@@ -419,6 +433,9 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
         process_functions(doc, ins, cnt);
     }
 
+    for (size_t i = 0; i < cnt; i++) {
+        if (ins[i].args_json) free((void *)ins[i].args_json);
+    }
     free(ins);
 }
 
