@@ -233,10 +233,13 @@ void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
     (void)args; // unused
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    if (stack) {
-        yyjson_mut_val *top_value = yyjson_mut_arr_get_last(stack);
-        if (top_value) {
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)top_value));
+    if (stack && yyjson_mut_arr_size(stack) > 0) {
+        yyjson_mut_val *last = yyjson_mut_arr_remove_last(stack);
+        if (last) {
+            /* push original back */
+            yyjson_mut_arr_append(stack, last);
+            /* push a deep copy as duplicate */
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)last));
         }
     }
 }
