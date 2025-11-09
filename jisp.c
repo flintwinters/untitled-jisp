@@ -197,7 +197,6 @@ static jpm_status jpm_select_path(jpm_ptr in, jpm_ptr *out, void *ctx) {
 
 /* Simple mapper used in tests: check that the stored path equals "/". */
 static jpm_status jpm_check_path_is_root(jpm_ptr in, void *ctx) {
-    (void)ctx;
     const char *pth = jpm_path(in);
     if (!pth || strcmp(pth, "/") != 0) return JPM_ERR_INVALID_ARG;
     return JPM_OK;
@@ -230,7 +229,6 @@ void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args) {
 }
 
 void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args; // unused
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (stack && yyjson_mut_arr_size(stack) > 0) {
@@ -245,7 +243,6 @@ void duplicate_top(yyjson_mut_doc *doc, yyjson_val *args) {
 }
 
 void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args; // unused
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (stack && yyjson_mut_arr_size(stack) >= 2) {
@@ -261,7 +258,6 @@ void add_two_top(yyjson_mut_doc *doc, yyjson_val *args) {
 
 // Custom function to replicate Python's `eval_code` for the example
 void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args; // unused
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     
     yyjson_mut_val *temp_sum_val = yyjson_mut_obj_get(root, "temp_sum");
@@ -285,7 +281,6 @@ void calculate_final_result(yyjson_mut_doc *doc, yyjson_val *args) {
 }
 
 void print_json(yyjson_mut_doc *doc, yyjson_val *args) {
-    (void)args; // unused
     yyjson_write_err err;
     char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, &err);
     if (json_str) {
