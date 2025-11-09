@@ -566,6 +566,16 @@ static void record_patch_remove(yyjson_mut_doc *doc, const char *path) {
     yyjson_mut_arr_append(res, patch);
 }
 
+/* jisp_stack_log_remove_last: Records the removal of the current top-of-stack index; call immediately before yyjson_mut_arr_remove_last so replay aligns. */
+static void jisp_stack_log_remove_last(yyjson_mut_doc *doc, yyjson_mut_val *stack) {
+    if (!doc || !stack) return;
+    size_t sz = yyjson_mut_arr_size(stack);
+    if (sz == 0) return;
+    char path[64];
+    snprintf(path, sizeof(path), "/stack/%zu", sz - 1);
+    record_patch_remove(doc, path);
+}
+
 /* Core "Opcodes" */
 
 
@@ -578,6 +588,7 @@ void pop_and_store(yyjson_mut_doc *doc) {
         jisp_fatal(doc, "pop_and_store: need at least [value, key] on stack");
     }
 
+    jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *key_val_mut = yyjson_mut_arr_remove_last(stack);
     if (!yyjson_is_str((yyjson_val *)key_val_mut)) {
         jisp_fatal(doc, "pop_and_store: key must be a string");
@@ -586,6 +597,7 @@ void pop_and_store(yyjson_mut_doc *doc) {
     size_t key_len = strlen(key);
     char *key_in_doc = unsafe_yyjson_mut_strncpy(doc, key, key_len);
 
+    jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *value = yyjson_mut_arr_remove_last(stack);
     if (!value || !key_in_doc) {
         jisp_fatal(doc, "pop_and_store: failed to pop value or duplicate key");
@@ -609,14 +621,18 @@ void duplicate_top(yyjson_mut_doc *doc) {
     if (yyjson_mut_arr_size(stack) == 0) {
         jisp_fatal(doc, "duplicate_top: stack is empty");
     }
+    /* log and pop the current top */
+    jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *last = yyjson_mut_arr_remove_last(stack);
     if (!last) {
         jisp_fatal(doc, "duplicate_top: failed to pop top of stack");
     }
-    /* push original back */
+    /* push original back and log */
     yyjson_mut_arr_append(stack, last);
-    /* push a deep copy as duplicate (copying from mutable value) */
-    yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, last));
+    record_patch_add_val(doc, "/stack/-", last);
+    /* push a deep copy as duplicate and log */
+    yyjson_mut_val *dup = jisp_mut_deep_copy(doc, last);
+    yyjson_mut_arr_append(stack, dup);
     record_patch_add_val(doc, "/stack/-", last);
 }
 
@@ -627,7 +643,9 @@ void add_two_top(yyjson_mut_doc *doc) {
         jisp_fatal(doc, "add_two_top: need at least two values on stack");
     }
 
+    jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *val1_mut = yyjson_mut_arr_remove_last(stack);
+    jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *val2_mut = yyjson_mut_arr_remove_last(stack);
     if (!val1_mut || !val2_mut) {
         jisp_fatal(doc, "add_two_top: failed to pop operands");
@@ -670,6 +688,7 @@ void calculate_final_result(yyjson_mut_doc *doc) {
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     double stack_val = 0;
     if (stack && yyjson_mut_arr_size(stack) > 0) {
+        jisp_stack_log_remove_last(doc, stack);
         yyjson_mut_val *val_mut = yyjson_mut_arr_remove_last(stack);
         if (!val_mut) {
             jisp_fatal(doc, "calculate_final_result: failed to pop value from stack");
