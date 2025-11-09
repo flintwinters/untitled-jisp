@@ -100,9 +100,11 @@ void pop_and_store(yyjson_mut_doc *doc, yyjson_val *args) {
     yyjson_val *key_val = yyjson_arr_get_first(args);
     if (stack && yyjson_mut_arr_size(stack) > 0 && key_val && yyjson_is_str(key_val)) {
         const char *key = yyjson_get_str(key_val);
+        size_t key_len = strlen(key);
+        char *key_in_doc = unsafe_yyjson_mut_strncpy(doc, key, key_len);
         yyjson_mut_val *value = yyjson_mut_arr_remove_last(stack);
-        if (value) {
-            yyjson_mut_obj_add_val(doc, root, key, value);
+        if (value && key_in_doc) {
+            yyjson_mut_obj_add_val(doc, root, key_in_doc, value);
         }
     }
 }
