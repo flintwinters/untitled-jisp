@@ -426,6 +426,62 @@ int main(void) {
             assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
         }
 
+        {
+            yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+
+            /* Prepare nested structures for multi-segment and RFC 6901 decoding tests */
+            yyjson_mut_val *user = yyjson_mut_obj(doc);
+            yyjson_mut_val *profile = yyjson_mut_obj(doc);
+            yyjson_mut_obj_add_val(doc, user, "profile", profile);
+            yyjson_mut_obj_add_val(doc, root_local, "user", user);
+            yyjson_mut_obj_add_int(doc, profile, "age", 42);
+            yyjson_mut_obj_add_int(doc, profile, "x/y", 1);  /* requires ~1 decoding */
+            yyjson_mut_obj_add_int(doc, profile, "x~y", 2);  /* requires ~0 decoding */
+
+            yyjson_mut_val *nums = yyjson_mut_arr(doc);
+            yyjson_mut_arr_add_real(doc, nums, 7);
+            yyjson_mut_arr_add_real(doc, nums, 8);
+            yyjson_mut_arr_add_real(doc, nums, 9);
+            yyjson_mut_obj_add_val(doc, root_local, "nums", nums);
+
+            yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+            int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
+
+            jpm_ptr p_age;
+            assert(jpm_return(doc, "/user/profile/age", &p_age) == JPM_OK && jpm_is_valid(p_age));
+            assert((int64_t)yyjson_mut_get_int(jpm_value(p_age)) == 42);
+
+            jpm_ptr p_slash;
+            assert(jpm_return(doc, "/user/profile/x~1y", &p_slash) == JPM_OK && jpm_is_valid(p_slash));
+            assert((int64_t)yyjson_mut_get_int(jpm_value(p_slash)) == 1);
+
+            jpm_ptr p_tilde;
+            assert(jpm_return(doc, "/user/profile/x~0y", &p_tilde) == JPM_OK && jpm_is_valid(p_tilde));
+            assert((int64_t)yyjson_mut_get_int(jpm_value(p_tilde)) == 2);
+
+            jpm_ptr p_idx;
+            assert(jpm_return(doc, "/nums/2", &p_idx) == JPM_OK && jpm_is_valid(p_idx));
+            assert((int64_t)yyjson_mut_get_int(jpm_value(p_idx)) == 9);
+
+            /* Out-of-range and invalid paths should be treated as not found with yyjson_mut_ptr_get */
+            jpm_ptr p_oob;
+            assert(jpm_return(doc, "/nums/99", &p_oob) == JPM_ERR_NOT_FOUND);
+
+            jpm_ptr p_bad_type;
+            assert(jpm_return(doc, "/temp_sum/0", &p_bad_type) == JPM_ERR_NOT_FOUND);
+
+            jpm_ptr p_bad_escape;
+            assert(jpm_return(doc, "/user/profile/x~2y", &p_bad_escape) == JPM_ERR_NOT_FOUND);
+
+            jpm_ptr_release(&p_idx);
+            jpm_ptr_release(&p_tilde);
+            jpm_ptr_release(&p_slash);
+            jpm_ptr_release(&p_age);
+
+            ref_val = yyjson_mut_obj_get(root_local, "ref");
+            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+        }
+
         // add_block
     const jisp_instruction add_block[] = {
         {push_value, "[10]"},
