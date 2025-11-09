@@ -801,7 +801,6 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
             record_patch_add_val(doc, "/stack/-", elem);
         } else if (yyjson_mut_is_obj(elem)) {
             /* Special-case: object with "." field: array → execute as entrypoint; string → run op if found */
-            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
             yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
             if (dot) {
                 if (yyjson_mut_is_arr(dot)) {
@@ -818,6 +817,8 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
                 } else {
                     jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
                 }
+            } else {
+                yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
             }
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
