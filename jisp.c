@@ -375,8 +375,8 @@ void duplicate_top(yyjson_mut_doc *doc) {
     }
     /* push original back */
     yyjson_mut_arr_append(stack, last);
-    /* push a deep copy as duplicate */
-    yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)last));
+    /* push a deep copy as duplicate (copying from mutable value) */
+    yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, last));
 }
 
 void add_two_top(yyjson_mut_doc *doc) {
@@ -510,16 +510,16 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
         if (yyjson_mut_is_str(elem)) {
             /* Push string literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
+            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
         } else if (yyjson_is_num((yyjson_val *)elem)) {
             /* Push number literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
+            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
         } else if (yyjson_mut_is_arr(elem)) {
             /* Push array literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
+            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
         } else if (yyjson_mut_is_obj(elem)) {
             /* Push object literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
+            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
