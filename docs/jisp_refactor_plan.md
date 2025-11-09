@@ -13,7 +13,7 @@ Understanding
 - Entry-point JSON (runtime-provided) remains supported:
   - string "op_name" → call op
   - number → push number
-  - array ["op_name", ...args] → push each arg (in order) as literals, then call op
+  - array → push the array value as a single literal onto the stack (no implicit call)
   - This removes explicit args plumbing; ops read their own args from the stack.
 
 API/Code changes
@@ -36,11 +36,7 @@ API/Code changes
    - Iterate root["entrypoint"].
    - If elem is string → resolve op by name and invoke it.
    - If elem is number → push it.
-   - If elem is array ["op_name", ...args] → resolve op, for each arg:
-       • number → push number
-       • string → push string
-       • other JSON values → deep-copy and push (for future flexibility)
-     Then invoke op.
+   - If elem is array → deep-copy the array and push it onto the stack (treat as a literal; do not invoke).
    - Remove args JSON building/serialization.
 
 4) Update ops to use stack for args/results
