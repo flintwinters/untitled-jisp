@@ -311,7 +311,10 @@ void process_functions(yyjson_mut_doc *doc, const jisp_instruction *instructions
 }
 
 int main(int argc, char **argv) {
-    (void)argc;
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s test.json\n", argv[0]);
+        return 1;
+    }
     // Load initial JSON from file provided as first command-line argument.
     const char *filename = argv[1];
     FILE *fp = fopen(filename, "rb");
@@ -333,11 +336,8 @@ int main(int argc, char **argv) {
     free(buf);
     yyjson_doc_free(in);
     
-    yyjson_mut_val *stack = yyjson_mut_arr(doc);
-    yyjson_mut_obj_add_val(doc, root, "stack", stack);
-    yyjson_mut_obj_add_int(doc, root, "temp_sum", 0);
-    yyjson_mut_obj_add_int(doc, root, "temp_mult", 0);
-    yyjson_mut_obj_add_int(doc, root, "final_result", 0);
+    /* Initial state (stack, temp_sum, temp_mult, final_result, user/profile, nums)
+       is provided by the input JSON file. */
 
     // Tests for jpm_doc_retain and jpm_doc_release
     {
@@ -444,20 +444,7 @@ int main(int argc, char **argv) {
     {
         yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
 
-        /* Prepare nested structures for multi-segment and RFC 6901 decoding tests */
-        yyjson_mut_val *user = yyjson_mut_obj(doc);
-        yyjson_mut_val *profile = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_val(doc, user, "profile", profile);
-        yyjson_mut_obj_add_val(doc, root_local, "user", user);
-        yyjson_mut_obj_add_int(doc, profile, "age", 42);
-        yyjson_mut_obj_add_int(doc, profile, "x/y", 1);  /* requires ~1 decoding */
-        yyjson_mut_obj_add_int(doc, profile, "x~y", 2);  /* requires ~0 decoding */
-
-        yyjson_mut_val *nums = yyjson_mut_arr(doc);
-        yyjson_mut_arr_add_int(doc, nums, 7);
-        yyjson_mut_arr_add_int(doc, nums, 8);
-        yyjson_mut_arr_add_int(doc, nums, 9);
-        yyjson_mut_obj_add_val(doc, root_local, "nums", nums);
+        /* Nested structures (user/profile and nums) are provided by the input JSON file. */
 
         yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
         int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
