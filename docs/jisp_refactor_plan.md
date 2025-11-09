@@ -1,79 +1,107 @@
-Refactor plan: implicit-arg, stack-based JISP with token union (no jisp_instruction)
+# JISP architecture and refactor status (token union, implicit-arg, JPM, yyjson)
 
-Understanding
-- Eliminate jisp_instruction { op, args_json } and the per-instruction JSON parsing.
-- Introduce a lightweight C token union to represent an instruction stream: tokens can be one of:
-  - OP: a jisp_op function pointer
-  - INT/REAL/STR: literal values
-  - JPM: a const jpm_ptr* monad handle; interpreter pushes a shallow pointer handle (no deep copy) onto the pointer stack
-- Interpreter semantics:
-  - Literal tokens push a corresponding yyjson value onto root["stack"].
-  - JPM tokens push a shallow pointer handle onto a C-side pointer stack managed by the interpreter.
-  - OP tokens invoke the function with signature void jisp_op(yyjson_mut_doc *doc).
-  - All op arguments are implicitly consumed from the top of root["stack"] (LIFO). Ops push results back on the stack when applicable.
-- Entry-point JSON (runtime-provided) remains supported:
-  - string "op_name" → call op
-  - number → push number
-  - array → push the array value as a single literal onto the stack (no implicit call)
-  - This removes explicit args plumbing; ops read their own args from the stack.
+This document reflects the current, implemented state of the JISP runtime in C (see jisp.c) and the remaining TODOs. The original “refactor plan” has been largely completed and the runtime now runs on:
+- A token-union instruction stream with an implicit-argument stack in JSON.
+- A small set of stack-based ops.
+- A JSON Pointer monad (JPM) for pointer semantics with document-level reference counting.
 
-API/Code changes
-1) Change op signature and registry
-   - typedef void (*jisp_op)(yyjson_mut_doc *doc);  // remove args parameter
-   - Update all existing ops: push_value will be removed; pop_and_store, duplicate_top, add_two_top, calculate_final_result, print_json adapted to stack-args.
+The sections below describe what is implemented, current semantics, and what remains.
 
-2) Introduce token union and interpreter for C-authored sequences
-   - enum jisp_tok_kind { JISP_TOK_OP, JISP_TOK_INT, JISP_TOK_REAL, JISP_TOK_STR, JISP_TOK_JPM };
-   - struct jisp_tok { kind; union { jisp_op op; int64_t i; double d; const char *s; const jpm_ptr *ptr; } as; };
-   - void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count);
-   - Behavior:
-     - INT → yyjson_mut_arr_add_sint
-     - REAL → yyjson_mut_arr_add_real
-     - STR → duplicate into doc and push as string
-     - JPM → push a shallow pointer handle (const jpm_ptr*) into a dedicated pointer stack; no deep copy
-     - OP → call function
+## Implemented
 
-3) Rewrite process_entrypoint(doc)
-   - Iterate root["entrypoint"].
-   - If elem is string → resolve op by name and invoke it.
-   - If elem is number → push it.
-   - If elem is array → deep-copy the array and push it onto the stack (treat as a literal; do not invoke).
-   - Remove args JSON building/serialization.
+1) Token union and interpreter
+- Types: enum jisp_tok_kind { JISP_TOK_OP, JISP_TOK_INT, JISP_TOK_REAL, JISP_TOK_STR, JISP_TOK_JPM } and struct jisp_tok { kind; union { jisp_op op; int64_t i; double d; const char *s; const jpm_ptr *ptr; } as; }.
+- Interpreter: void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count).
+- Behavior today:
+  - INT → yyjson_mut_arr_add_sint(root["stack"], i).
+  - REAL → yyjson_mut_arr_add_real(root["stack"], d).
+  - STR → push a string into root["stack"] (copied into the doc).
+  - OP → call function pointer jisp_op(doc).
+  - JPM → not yet supported in run_tokens; attempting to run a JPM token is a fatal error (by design for now).
 
-4) Update ops to use stack for args/results
-   - pop_and_store expects: [value, key] on stack top; pops key (string), pops value, sets root[key] = value.
-   - duplicate_top expects: [x]; pops x, pushes x, pushes deep copy of x.
-   - add_two_top expects: [a, b]; pops b, pops a; both numeric; pushes (a+b).
-   - calculate_final_result: unchanged semantics but no args; it may pop from stack if needed (as current code already peeks/pops).
-   - print_json: unchanged semantics; ignores stack.
+2) Op signature and registry
+- Signature: typedef void (*jisp_op)(yyjson_mut_doc *doc).
+- Registry: a small JSON document maps op names to numeric IDs; jisp_op_from_id(int) returns the function pointer. Global init/fini helpers are present.
 
-5) Remove legacy push_value op usage in C paths
-   - Replace C-built instruction arrays with token arrays:
-     • add_block: INT 10, INT 20, OP add_two_top, STR "temp_sum", OP pop_and_store
-     • duplicate_and_store_block: INT 50, OP duplicate_top, STR "temp_mult", OP pop_and_store
-     • main_part2: INT 10, OP calculate_final_result
-   - Keep entrypoint backwards compatible for numbers and string op names.
+3) Stack-based ops (arguments/results are on root["stack"])
+- pop_and_store:
+  - Requires at least two stack items [value, key] (topmost is key).
+  - Key must be a string; value is stored to root[key].
+- duplicate_top:
+  - Pops the top, pushes it back, then pushes a deep-copy of it; net +1 element.
+- add_two_top:
+  - Pops two numeric values, pushes their sum as a real.
+- calculate_final_result:
+  - Reads temp_sum, temp_mult from root if present, optionally pops a numeric from stack, and writes root["final_result"].
+- print_json:
+  - Pretty-prints the document to stdout.
 
-6) Error handling
-   - If an op needs N args but fewer are on stack → jisp_fatal with descriptive message.
-   - Type mismatches (e.g., key must be string, numbers for arithmetic) → jisp_fatal.
-   - Maintain existing pretty JSON dump on fatal.
+All ops validate inputs and use jisp_fatal(...) on errors. Fatal output includes a pretty-printed snapshot of the current JSON state.
 
-7) Tests/Asserts adjustment
-   - Remove references to args_json and jisp_instruction.
-   - Validate stack sizes before/after ops as appropriate.
-   - Keep JPM tests unchanged (orthogonal).
+4) Entry-point processing (process_entrypoint)
+- Input: root["entrypoint"] array.
+- Semantics:
+  - String elements are treated as string literals and pushed on the stack (no op dispatch).
+  - Numeric elements are pushed as numbers.
+  - Array elements are deep-copied and pushed as array literals (no implicit call).
+  - Object elements are pushed as literals, and additionally:
+    - If the object contains a field ".":
+      • If "." is an array: that array is treated as a nested entrypoint and is processed recursively.
+      • If "." is a string: it is treated as an op name; if found in the registry, the op is invoked immediately; if not found, the object remains just a literal.
+    - Other cases are rejected with a fatal error.
+- Note: This differs from the original plan which proposed “string → call op.” The current implementation treats plain strings as literals; op dispatch via entrypoint is only through an object with a "." field that is a string.
 
-Migration impact
-- C-defined instruction sequences change to token arrays.
-- Entrypoint JSON supports strings, numbers, and arrays as literals only; no legacy ["op_name", ...args] interpretation.
+5) Deep-copy helper
+- jisp_mut_deep_copy(doc, val) deep-copies a yyjson_mut_val within the same document; used by duplicate_top and entrypoint literal handling.
 
-Next steps (upon approval)
-- Implement typedef/signature changes and registry updates.
-- Add token union and run_tokens().
-- Rewrite ops to use the stack for inputs.
-- Replace process_functions() with run_tokens() and refactor process_entrypoint().
-- Update main() call sites to use token arrays.
-- Remove push_value from the registry (or keep as transition alias that reads one literal from the stack if needed temporarily).
+6) JSON Pointer Monad (JPM)
+- Data types: jpm_ptr { doc, val, path }, jpm_status enum, and combinators jpm_bind/jpm_map.
+- Path resolution: jpm_return(doc, "/rfc6901/path", &out)
+  - Uses yyjson_mut_ptr_get for RFC 6901 semantics, including "~0" and "~1" decoding.
+  - On success, retains the document and returns a handle to the target yyjson_mut_val.
+- Lifecycle: jpm_ptr_release(&p) decrements the refcount and nulls the handle.
+- Helpers: jpm_is_valid, jpm_path, jpm_value.
+- Tests in main() exercise success and failure cases, including nested objects, arrays, and escape sequences.
 
-Please confirm this plan or indicate any deviation (e.g., keep push_value as compatibility op, support additional literal types in entrypoint, or different arg ordering on the stack).
+7) Document reference counting via root["ref"]
+- Helpers: jpm_doc_retain / jpm_doc_release manipulate an integer field root["ref"] and free the document when it reaches zero.
+- jpm_return retains on success; jpm_ptr_release releases.
+- Current program end still uses yyjson_mut_doc_free(doc) directly; see TODOs.
+
+8) Error handling and diagnostics
+- jisp_fatal(...) and jisp_fatal_parse(...) print descriptive messages and a JSON snapshot; source position reporting is included for input parse failures.
+
+9) End-to-end flow in main
+- Reads JSON from file, parses to immutable yyjson_doc, copies to yyjson_mut_doc as root, runs token sequences, processes entrypoint, prints final JSON, performs assertions for retain/release and JPM, then frees resources.
+
+## Behavioral differences from the original plan
+
+- Entry-point strings:
+  - Original plan: string "op_name" → call op.
+  - Current implementation: string is treated as a literal; only objects with a "." string dispatch ops.
+- JPM tokens:
+  - Plan: interpreter pushes a shallow pointer handle to a pointer stack.
+  - Current implementation: run_tokens does not support JPM tokens; encountering one is a fatal error.
+
+## Remaining work / TODOs
+
+- JPM tokens in run_tokens:
+  - Add a pointer stack (C-side) and support JISP_TOK_JPM in run_tokens.
+  - Decide on API surface for mixing pointer-stack values with JSON-stack ops (e.g., dedicated ops for ptr_get/ptr_set).
+- Entry-point semantics:
+  - Decide whether to also support plain string → op dispatch (backwards-compatible extension) or keep the current “strings are literals; only object '.' dispatches ops” rule.
+- Reference counting cleanup:
+  - Replace direct yyjson_mut_doc_free(...) with jpm_doc_release(...) at final shutdown, and ensure creation sites perform balanced retains if needed.
+- Optional residual patch logging:
+  - The separate plan in docs/json_patch_residual_plan.md can be implemented to record minimal JSON Patch operations when root["is_reversible"] is true.
+- Additional tests:
+  - JPM tokens (once implemented), more negative-path tests for entrypoint object "." cases, and refcount behavior across failures.
+
+## Migration/usage notes
+
+- No jisp_instruction objects are used anymore; token arrays are the C-side authoring mechanism.
+- Ops consume and produce values on root["stack"] only; argument order is LIFO.
+- Raw jpm_ptr handles are not serialized; keep them on the C side only.
+- Deep copies are performed when pushing literals to preserve isolation from later mutations.
+
+This document supersedes the older refactor plan and describes the authoritative current behavior and the short list of open tasks.
