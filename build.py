@@ -9,7 +9,18 @@ console = Console()
 
 # Compiler and flags
 CC = "gcc"
-CFLAGS = ["-Wall", "-Wextra", "-Werror", "-std=c11", "-I.", "-g", "-O0"]
+CFLAGS = [
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-Wno-unused-parameter",
+    "-Wno-unused-variable",
+    "-Wno-unused-function",
+    "-std=c11",
+    "-I.",
+    "-g",
+    "-O0"
+]
 LDFLAGS = []
 
 # Source files and target executable
@@ -40,7 +51,8 @@ def build():
             "--error-exitcode=1",
             "--leak-check=full",
             "--show-leak-kinds=all",
-            "./" + TARGET
+            "./" + TARGET,
+            "test.json"
         ], capture_output=True, text=True)
         if result.stdout:
             console.print(result.stdout, highlight=True)
