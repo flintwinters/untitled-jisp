@@ -332,6 +332,83 @@ static jpm_status jpm_check_path_is_root(jpm_ptr in, void *ctx) {
     return JPM_OK;
 }
 
+/* Deep copy a yyjson_mut_val within the same document. */
+static yyjson_mut_val *jisp_mut_deep_copy(yyjson_mut_doc *doc, yyjson_mut_val *val) {
+    if (!doc || !val) return NULL;
+
+    yyjson_type t = unsafe_yyjson_get_type(val);
+
+    switch (t) {
+        case YYJSON_TYPE_NULL: {
+            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
+            if (!out) return NULL;
+            unsafe_yyjson_set_tag(out, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
+            return out;
+        }
+        case YYJSON_TYPE_BOOL: {
+            bool b = yyjson_get_bool((yyjson_val *)val);
+            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
+            if (!out) return NULL;
+            unsafe_yyjson_set_bool(out, b);
+            return out;
+        }
+        case YYJSON_TYPE_NUM: {
+            int64_t n = (int64_t)yyjson_mut_get_sint(val);
+            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
+            if (!out) return NULL;
+            unsafe_yyjson_set_sint(out, n);
+            return out;
+        }
+        case YYJSON_TYPE_STR: {
+            const char *s = unsafe_yyjson_get_str(val);
+            size_t len = unsafe_yyjson_get_len(val);
+            char *copy = unsafe_yyjson_mut_strncpy(doc, s ? s : "", s ? len : 0);
+            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
+            if (!out) return NULL;
+            unsafe_yyjson_set_strn(out, copy, s ? len : 0);
+            return out;
+        }
+        case YYJSON_TYPE_ARR: {
+            yyjson_mut_val *out = yyjson_mut_arr(doc);
+            if (!out) return NULL;
+            yyjson_mut_arr_iter it;
+            yyjson_mut_val *e;
+            if (yyjson_mut_arr_iter_init(val, &it)) {
+                while ((e = yyjson_mut_arr_iter_next(&it))) {
+                    yyjson_mut_val *c = jisp_mut_deep_copy(doc, e);
+                    if (!c) return NULL;
+                    yyjson_mut_arr_append(out, c);
+                }
+            }
+            return out;
+        }
+        case YYJSON_TYPE_OBJ: {
+            yyjson_mut_val *out = yyjson_mut_obj(doc);
+            if (!out) return NULL;
+            yyjson_mut_obj_iter it;
+            yyjson_mut_val *k;
+            if (yyjson_mut_obj_iter_init(val, &it)) {
+                while ((k = yyjson_mut_obj_iter_next(&it))) {
+                    yyjson_mut_val *v = yyjson_mut_obj_iter_get_val(k);
+                    const char *ks = unsafe_yyjson_get_str(k);
+                    size_t klen = unsafe_yyjson_get_len(k);
+                    char *kcopy = unsafe_yyjson_mut_strncpy(doc, ks ? ks : "", ks ? klen : 0);
+                    yyjson_mut_val *vcopy = jisp_mut_deep_copy(doc, v);
+                    if (!vcopy) return NULL;
+                    yyjson_mut_obj_add_val(doc, out, kcopy, vcopy);
+                }
+            }
+            return out;
+        }
+        default: {
+            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
+            if (!out) return NULL;
+            unsafe_yyjson_set_tag(out, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
+            return out;
+        }
+    }
+}
+
 // Core "Opcodes"
 
 
@@ -376,7 +453,7 @@ void duplicate_top(yyjson_mut_doc *doc) {
     /* push original back */
     yyjson_mut_arr_append(stack, last);
     /* push a deep copy as duplicate (copying from mutable value) */
-    yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, last));
+    yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, last));
 }
 
 void add_two_top(yyjson_mut_doc *doc) {
@@ -510,16 +587,16 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
         if (yyjson_mut_is_str(elem)) {
             /* Push string literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
+            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         } else if (yyjson_is_num((yyjson_val *)elem)) {
             /* Push number literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
+            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         } else if (yyjson_mut_is_arr(elem)) {
             /* Push array literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
+            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         } else if (yyjson_mut_is_obj(elem)) {
             /* Push object literal by deep-copy */
-            yyjson_mut_arr_append(stack, yyjson_mut_val_copy(doc, elem));
+            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
