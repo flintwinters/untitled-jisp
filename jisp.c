@@ -326,7 +326,7 @@ int main(int argc, char **argv) {
     buf[fsz] = '\0';
     fclose(fp);
 
-    yyjson_doc *in = yyjson_read(buf, (size_t)fsz, 0);
+    yyjson_doc *in = yyjson_read(buf, (size_t)fsz, YYJSON_READ_ALLOW_COMMENTS);
     yyjson_val *in_root = yyjson_doc_get_root(in);
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);

@@ -10,5 +10,6 @@
             "x~y": 2
         }
     },
+    // this is a comment
     "nums": [7, 8, 9]
 }
