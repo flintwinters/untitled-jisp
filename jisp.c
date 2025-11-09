@@ -564,16 +564,15 @@ static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) 
     }
 }
 
-/* Process entrypoint: strings → ops, numbers/arrays → push literals onto stack */
-static void process_entrypoint(yyjson_mut_doc *doc) {
-    if (!doc) return;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    if (!root) return;
-    yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
-    if (!ep) return;
+/* Process a generic "entrypoint-like" array with the same semantics. */
+static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
+    if (!doc || !ep) return;
     if (!yyjson_mut_is_arr(ep)) {
         jisp_fatal(doc, "entrypoint must be an array");
     }
+
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return;
 
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (!stack || !yyjson_mut_is_arr(stack)) {
@@ -595,12 +594,31 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
             /* Push array literal by deep-copy */
             yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         } else if (yyjson_mut_is_obj(elem)) {
-            /* Push object literal by deep-copy */
-            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+            /* Special-case: object with "." field is treated as an array to execute */
+            yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
+            if (dot) {
+                if (!yyjson_mut_is_arr(dot)) {
+                    jisp_fatal(doc, "entrypoint object '.' field must be an array");
+                }
+                process_ep_array(doc, dot);
+            } else {
+                /* Push object literal by deep-copy */
+                yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+            }
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
     }
+}
+
+/* Process entrypoint: strings → ops, numbers/arrays → push literals onto stack */
+static void process_entrypoint(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return;
+    yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
+    if (!ep) return;
+    process_ep_array(doc, ep);
 }
 
 int main(int argc, char **argv) {
