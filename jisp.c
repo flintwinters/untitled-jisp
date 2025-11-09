@@ -224,6 +224,23 @@ int main(void) {
         assert((int64_t)yyjson_mut_get_int(ref_val) == 1);
     }
 
+    // Additional simple refcount test: retain then release back to previous value
+    {
+        yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+        yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == 1);
+
+        // Retain to bump ref to 2
+        jpm_doc_retain(doc);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == 2);
+
+        // Release to bring it back to 1
+        jpm_doc_release(doc);
+        ref_val = yyjson_mut_obj_get(root_local, "ref");
+        assert((int64_t)yyjson_mut_get_int(ref_val) == 1);
+    }
+
     // add_block
     const jisp_instruction add_block[] = {
         {push_value, "[10]"},
