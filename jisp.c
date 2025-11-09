@@ -118,7 +118,7 @@ static yyjson_mut_val *jpm_value(jpm_ptr p) {
     return p.val;
 }
 
-/* Minimal resolver: only supports root path "/" for now. On success, retains the doc. */
+/* Minimal resolver: supports "/" and single-segment "/token" from root. Retains the doc on success. */
 static jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *out) {
     if (!out) return JPM_ERR_INVALID_ARG;
     out->doc = NULL;
@@ -127,20 +127,66 @@ static jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_
 
     if (!doc || !rfc6901_path) return JPM_ERR_INVALID_ARG;
 
-    if (strcmp(rfc6901_path, "/") != 0) {
-        return JPM_ERR_NOT_FOUND;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return JPM_ERR_NOT_FOUND;
+
+    if (strcmp(rfc6901_path, "/") == 0) {
+        jpm_doc_retain(doc);
+        out->doc = doc;
+        out->val = root;
+        out->path = rfc6901_path;
+        return JPM_OK;
     }
 
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-    if (!root) {
+    /* Only handle single segment: "/name" or "/index". */
+    if (rfc6901_path[0] != '/' || rfc6901_path[1] == '\0') {
         return JPM_ERR_NOT_FOUND;
+    }
+    const char *seg_start = rfc6901_path + 1;
+    const char *slash = strchr(seg_start, '/');
+    if (slash && slash[0] != '\0') {
+        /* Multi-segment not supported yet. */
+        return JPM_ERR_NOT_FOUND;
+    }
+    size_t seg_len = slash ? (size_t)(slash - seg_start) : strlen(seg_start);
+
+    yyjson_mut_val *target = NULL;
+
+    if (yyjson_mut_is_obj(root)) {
+        /* Copy segment to temporary buffer to NUL-terminate for lookup. */
+        char *key = (char *)malloc(seg_len + 1);
+        if (!key) return JPM_ERR_INTERNAL;
+        memcpy(key, seg_start, seg_len);
+        key[seg_len] = '\0';
+        target = yyjson_mut_obj_get(root, key);
+        free(key);
+        if (!target) return JPM_ERR_NOT_FOUND;
+    } else if (yyjson_mut_is_arr(root)) {
+        /* Parse array index. */
+        char *buf = (char *)malloc(seg_len + 1);
+        if (!buf) return JPM_ERR_INTERNAL;
+        memcpy(buf, seg_start, seg_len);
+        buf[seg_len] = '\0';
+        char *endp = NULL;
+        long idx_l = strtol(buf, &endp, 10);
+        free(buf);
+        if (!endp || *endp != '\0' || idx_l < 0) return JPM_ERR_INVALID_ARG;
+        size_t idx = (size_t)idx_l;
+        size_t len = unsafe_yyjson_get_len(root);
+        if (idx >= len) return JPM_ERR_RANGE;
+        yyjson_val *cur = unsafe_yyjson_get_first((yyjson_val *)root);
+        for (size_t i = 0; i < idx; i++) {
+            cur = unsafe_yyjson_get_next(cur);
+        }
+        target = (yyjson_mut_val *)cur;
+    } else {
+        return JPM_ERR_TYPE;
     }
 
     /* Retain document on success. */
     jpm_doc_retain(doc);
-
     out->doc = doc;
-    out->val = root;
+    out->val = target;
     out->path = rfc6901_path;
     return JPM_OK;
 }
@@ -339,6 +385,40 @@ int main(void) {
 
             // Release should decrement back
             jpm_ptr_release(&p_root);
+            ref_val = yyjson_mut_obj_get(root_local, "ref");
+            assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
+        }
+
+        // More JPM tests: support one-segment paths and bind/map
+        {
+            yyjson_mut_val *root_local = yyjson_mut_doc_get_root(doc);
+            yyjson_mut_val *stack_local = yyjson_mut_obj_get(root_local, "stack");
+            yyjson_mut_val *ref_val = yyjson_mut_obj_get(root_local, "ref");
+            int64_t ref_before = ref_val ? yyjson_mut_get_int(ref_val) : 0;
+
+            jpm_ptr p_root;
+            jpm_status st0 = jpm_return(doc, "/", &p_root);
+            assert(st0 == JPM_OK && jpm_is_valid(p_root));
+
+            jpm_ptr p_stack_via_return;
+            jpm_status st1 = jpm_return(doc, "/stack", &p_stack_via_return);
+            assert(st1 == JPM_OK && jpm_is_valid(p_stack_via_return));
+            assert(jpm_value(p_stack_via_return) == stack_local);
+
+            jpm_ptr p_stack_via_bind;
+            jpm_status st2 = jpm_bind(p_root, jpm_select_path, (void*)"/stack", &p_stack_via_bind);
+            assert(st2 == JPM_OK && jpm_is_valid(p_stack_via_bind));
+            assert(jpm_value(p_stack_via_bind) == stack_local);
+
+            jpm_ptr p_after_map;
+            jpm_status st3 = jpm_map(p_root, jpm_check_path_is_root, NULL, &p_after_map);
+            assert(st3 == JPM_OK && jpm_is_valid(p_after_map));
+            assert(jpm_value(p_after_map) == jpm_value(p_root));
+
+            jpm_ptr_release(&p_stack_via_bind);
+            jpm_ptr_release(&p_stack_via_return);
+            jpm_ptr_release(&p_root);
+
             ref_val = yyjson_mut_obj_get(root_local, "ref");
             assert((int64_t)yyjson_mut_get_int(ref_val) == ref_before);
         }
