@@ -409,6 +409,137 @@ static yyjson_mut_val *jisp_mut_deep_copy(yyjson_mut_doc *doc, yyjson_mut_val *v
     }
 }
 
+/* Residual logging helpers (JSON Patch RFC 6902 minimal recording) */
+
+static bool is_reversible_enabled(yyjson_mut_doc *doc) {
+    if (!doc) return false;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return false;
+    yyjson_mut_val *flag = yyjson_mut_obj_get(root, "is_reversible");
+    if (!flag) return false;
+    return yyjson_get_bool((yyjson_val *)flag);
+}
+
+/* Ensure root["residual"] exists and is an array; create if missing. */
+static yyjson_mut_val *ensure_residual_array(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = ensure_root_object(doc);
+    if (!root) return NULL;
+    yyjson_mut_val *res = yyjson_mut_obj_get(root, "residual");
+    if (res) {
+        if (yyjson_mut_is_arr(res)) return res;
+        /* If present but not an array, do not mutate user data; skip logging. */
+        return NULL;
+    }
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    if (!arr) return NULL;
+    yyjson_mut_obj_add_val(doc, root, "residual", arr);
+    return arr;
+}
+
+/* Build a temporary RFC 6901 path for a single key: returns malloc'd string "/<encoded>" (caller frees). */
+static char *jisp_build_path_for_key_temp(const char *key) {
+    if (!key) return NULL;
+    size_t in_len = strlen(key);
+    size_t extra = 0;
+    for (size_t i = 0; i < in_len; i++) {
+        if (key[i] == '~' || key[i] == '/') extra++;
+    }
+    size_t out_len = 1 + in_len + extra; /* leading '/' + encoded */
+    char *buf = (char *)malloc(out_len + 1);
+    if (!buf) return NULL;
+    char *p = buf;
+    *p++ = '/';
+    for (size_t i = 0; i < in_len; i++) {
+        char c = key[i];
+        if (c == '~') {
+            *p++ = '~'; *p++ = '0';
+        } else if (c == '/') {
+            *p++ = '~'; *p++ = '1';
+        } else {
+            *p++ = c;
+        }
+    }
+    *p = '\0';
+    return buf;
+}
+
+static void record_patch_add_val(yyjson_mut_doc *doc, const char *path, yyjson_mut_val *val) {
+    if (!doc || !path) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", "add");
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+
+    yyjson_mut_val *vcopy = jisp_mut_deep_copy(doc, val);
+    if (vcopy) {
+        yyjson_mut_obj_add_val(doc, patch, "value", vcopy);
+    }
+    yyjson_mut_arr_append(res, patch);
+}
+
+static void record_patch_replace_val(yyjson_mut_doc *doc, const char *path, yyjson_mut_val *val) {
+    if (!doc || !path) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", "replace");
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+
+    yyjson_mut_val *vcopy = jisp_mut_deep_copy(doc, val);
+    if (vcopy) {
+        yyjson_mut_obj_add_val(doc, patch, "value", vcopy);
+    }
+    yyjson_mut_arr_append(res, patch);
+}
+
+static void record_patch_add_real(yyjson_mut_doc *doc, const char *path, double num) {
+    if (!doc || !path) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", "add");
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    yyjson_mut_obj_add_real(doc, patch, "value", num);
+    yyjson_mut_arr_append(res, patch);
+}
+
+static void record_patch_replace_real(yyjson_mut_doc *doc, const char *path, double num) {
+    if (!doc || !path) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", "replace");
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    yyjson_mut_obj_add_real(doc, patch, "value", num);
+    yyjson_mut_arr_append(res, patch);
+}
+
+static void record_patch_remove(yyjson_mut_doc *doc, const char *path) {
+    if (!doc || !path) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", "remove");
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    yyjson_mut_arr_append(res, patch);
+}
+
 // Core "Opcodes"
 
 
@@ -434,7 +565,17 @@ void pop_and_store(yyjson_mut_doc *doc) {
     if (!value || !key_in_doc) {
         jisp_fatal(doc, "pop_and_store: failed to pop value or duplicate key");
     }
+    bool existed = yyjson_mut_obj_get(root, key) != NULL;
+    char *path_buf = jisp_build_path_for_key_temp(key);
     yyjson_mut_obj_add_val(doc, root, key_in_doc, value);
+    if (path_buf) {
+        if (existed) {
+            record_patch_replace_val(doc, path_buf, value);
+        } else {
+            record_patch_add_val(doc, path_buf, value);
+        }
+        free(path_buf);
+    }
 }
 
 void duplicate_top(yyjson_mut_doc *doc) {
@@ -454,6 +595,8 @@ void duplicate_top(yyjson_mut_doc *doc) {
     yyjson_mut_arr_append(stack, last);
     /* push a deep copy as duplicate (copying from mutable value) */
     yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, last));
+    /* residual: record the visible add to stack */
+    record_patch_add_val(doc, "/stack/-", last);
 }
 
 void add_two_top(yyjson_mut_doc *doc) {
@@ -477,7 +620,10 @@ void add_two_top(yyjson_mut_doc *doc) {
 
     double val1 = (double)yyjson_mut_get_sint(val1_mut);
     double val2 = (double)yyjson_mut_get_sint(val2_mut);
-    yyjson_mut_arr_add_real(doc, stack, val1 + val2);
+    double sum = val1 + val2;
+    yyjson_mut_arr_add_real(doc, stack, sum);
+    /* residual: record the push */
+    record_patch_add_real(doc, "/stack/-", sum);
 }
 
 // Custom function to replicate Python's `eval_code` for the example
@@ -517,7 +663,14 @@ void calculate_final_result(yyjson_mut_doc *doc) {
     }
 
     double final_result = temp_sum + temp_mult + stack_val;
+    bool existed_final = yyjson_mut_obj_get(root, "final_result") != NULL;
     yyjson_mut_obj_add_real(doc, root, "final_result", final_result);
+    /* residual: record add/replace for final_result */
+    if (existed_final) {
+        record_patch_replace_real(doc, "/final_result", final_result);
+    } else {
+        record_patch_add_real(doc, "/final_result", final_result);
+    }
 }
 
 void print_json(yyjson_mut_doc *doc) {
@@ -587,12 +740,18 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
         if (yyjson_mut_is_str(elem)) {
             /* Push string literal by deep-copy */
             yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+            /* residual: record the add to stack */
+            record_patch_add_val(doc, "/stack/-", elem);
         } else if (yyjson_is_num((yyjson_val *)elem)) {
             /* Push number literal by deep-copy */
             yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+            /* residual: record the add to stack */
+            record_patch_add_val(doc, "/stack/-", elem);
         } else if (yyjson_mut_is_arr(elem)) {
             /* Push array literal by deep-copy */
             yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+            /* residual: record the add to stack */
+            record_patch_add_val(doc, "/stack/-", elem);
         } else if (yyjson_mut_is_obj(elem)) {
             /* Special-case: object with "." field: array → execute as entrypoint; string → run op if found */
             yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
