@@ -96,6 +96,7 @@ void duplicate_top(yyjson_mut_doc *doc);
 void add_two_top(yyjson_mut_doc *doc);
 void calculate_final_result(yyjson_mut_doc *doc);
 void print_json(yyjson_mut_doc *doc);
+void undo_last_residual(yyjson_mut_doc *doc);
 
 /* Global JISP op registry (JSON document) */
 typedef enum jisp_op_id {
@@ -103,7 +104,8 @@ typedef enum jisp_op_id {
     JISP_OP_DUPLICATE_TOP = 2,
     JISP_OP_ADD_TWO_TOP = 3,
     JISP_OP_CALCULATE_FINAL_RESULT = 4,
-    JISP_OP_PRINT_JSON = 5
+    JISP_OP_PRINT_JSON = 5,
+    JISP_OP_UNDO_LAST_RESIDUAL = 6
 } jisp_op_id;
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
@@ -115,6 +117,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_ADD_TWO_TOP: return add_two_top;
         case JISP_OP_CALCULATE_FINAL_RESULT: return calculate_final_result;
         case JISP_OP_PRINT_JSON: return print_json;
+        case JISP_OP_UNDO_LAST_RESIDUAL: return undo_last_residual;
         default: return NULL;
     }
 }
@@ -129,6 +132,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "add_two_top", JISP_OP_ADD_TWO_TOP);
     yyjson_mut_obj_add_int(d, root, "calculate_final_result", JISP_OP_CALCULATE_FINAL_RESULT);
     yyjson_mut_obj_add_int(d, root, "print_json", JISP_OP_PRINT_JSON);
+    yyjson_mut_obj_add_int(d, root, "undo_last_residual", JISP_OP_UNDO_LAST_RESIDUAL);
     g_jisp_op_registry = d;
 }
 
@@ -679,6 +683,49 @@ void print_json(yyjson_mut_doc *doc) {
     if (json_str) {
         printf("%s\n", json_str);
         free(json_str);
+    }
+}
+
+void undo_last_residual(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) {
+        jisp_fatal(doc, "undo_last_residual: missing root");
+    }
+    yyjson_mut_val *residual = yyjson_mut_obj_get(root, "residual");
+    if (!residual || !yyjson_mut_is_arr(residual) || yyjson_mut_arr_size(residual) == 0) {
+        jisp_fatal(doc, "undo_last_residual: 'residual' is missing or empty");
+    }
+
+    yyjson_mut_val *patch = yyjson_mut_arr_remove_last(residual);
+    if (!patch || !yyjson_mut_is_obj(patch)) {
+        jisp_fatal(doc, "undo_last_residual: top residual entry is not an object");
+    }
+
+    yyjson_mut_val *opv = yyjson_mut_obj_get(patch, "op");
+    yyjson_mut_val *pathv = yyjson_mut_obj_get(patch, "path");
+    if (!opv || !pathv || !yyjson_mut_is_str(opv) || !yyjson_mut_is_str(pathv)) {
+        jisp_fatal(doc, "undo_last_residual: residual entry must have string 'op' and 'path'");
+    }
+
+    const char *op = yyjson_get_str((yyjson_val *)opv);
+    const char *path = yyjson_get_str((yyjson_val *)pathv);
+
+    if (strcmp(op, "add") == 0) {
+        if (strcmp(path, "/stack/-") == 0) {
+            yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+            if (!stack || !yyjson_mut_is_arr(stack) || yyjson_mut_arr_size(stack) == 0) {
+                jisp_fatal(doc, "undo_last_residual: cannot remove last element from 'stack'");
+            }
+            (void)yyjson_mut_arr_remove_last(stack);
+        } else {
+            jisp_fatal(doc, "undo_last_residual: only supports undo for add to '/stack/-' at the moment");
+        }
+    } else if (strcmp(op, "replace") == 0) {
+        jisp_fatal(doc, "undo_last_residual: cannot undo 'replace' without previous value");
+    } else if (strcmp(op, "remove") == 0) {
+        jisp_fatal(doc, "undo_last_residual: cannot undo 'remove' without saved value");
+    } else {
+        jisp_fatal(doc, "undo_last_residual: unknown residual op '%s'", op ? op : "(null)");
     }
 }
 
