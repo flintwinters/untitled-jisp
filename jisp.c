@@ -566,14 +566,39 @@ static void record_patch_remove(yyjson_mut_doc *doc, const char *path) {
     yyjson_mut_arr_append(res, patch);
 }
 
-/* jisp_stack_log_remove_last: Records the removal of the current top-of-stack index; call immediately before yyjson_mut_arr_remove_last so replay aligns. */
+/* jisp_stack_log_remove_last: Records the removal of the current top-of-stack index; call immediately before yyjson_mut_arr_remove_last so replay aligns. 
+   Additionally records the value being removed in the patch's "value" field for potential undo. */
 static void jisp_stack_log_remove_last(yyjson_mut_doc *doc, yyjson_mut_val *stack) {
     if (!doc || !stack) return;
     size_t sz = yyjson_mut_arr_size(stack);
     if (sz == 0) return;
+
+    /* Build RFC 6901 path for the element to be removed. */
     char path[64];
     snprintf(path, sizeof(path), "/stack/%zu", sz - 1);
-    record_patch_remove(doc, path);
+
+    /* Peek the current top element so we can include it in the residual patch. */
+    yyjson_mut_val *last = NULL;
+    yyjson_mut_arr_iter it;
+    yyjson_mut_val *e;
+    size_t i = 0;
+    if (yyjson_mut_arr_iter_init(stack, &it)) {
+        while ((e = yyjson_mut_arr_iter_next(&it))) {
+            if (i == sz - 1) {
+                last = e;
+                break;
+            }
+            i++;
+        }
+    }
+
+    if (last) {
+        /* Record remove with the value for future undo. */
+        record_patch_with_val(doc, "remove", path, last);
+    } else {
+        /* Fallback: record remove without value if we couldn't peek. */
+        record_patch_remove(doc, path);
+    }
 }
 
 /* Core "Opcodes" */
