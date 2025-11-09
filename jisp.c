@@ -535,48 +535,27 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
                 }
             }
         } else if (yyjson_mut_is_arr(elem)) {
-            /* Array form: ["op_name", ...args]
-               - First element must be string op name
-               - Remaining elements become the args JSON array */
-            yyjson_mut_arr_iter it2;
-            if (!yyjson_mut_arr_iter_init(elem, &it2)) {
-                jisp_fatal(doc, "entrypoint array init failed at index %zu", cnt);
-            }
-            yyjson_mut_val *first = yyjson_mut_arr_iter_next(&it2);
-            if (!first || !yyjson_mut_is_str(first)) {
-                jisp_fatal(doc, "entrypoint array missing string op name at index %zu", cnt);
-            }
-            const char *op_name = yyjson_get_str((yyjson_val *)first);
-            jisp_op op = jisp_op_registry_get(op_name);
-            if (!op) {
-                jisp_fatal(doc, "Unknown entrypoint op: %s", op_name ? op_name : "(null)");
-            }
-
-            /* Build args JSON by copying remaining elements into a temp doc array and writing it */
+            /* Treat arrays as literal values: push the array onto the stack. */
             yyjson_mut_doc *adoc = yyjson_mut_doc_new(NULL);
             if (!adoc) {
-                jisp_fatal(doc, "allocation failed building args for %s", op_name ? op_name : "(null)");
+                jisp_fatal(doc, "allocation failed building array literal");
             }
-            yyjson_mut_val *arr = yyjson_mut_arr(adoc);
-            yyjson_mut_doc_set_root(adoc, arr);
-
-            yyjson_mut_val *sub;
-            while ((sub = yyjson_mut_arr_iter_next(&it2))) {
-                yyjson_mut_arr_append(arr, yyjson_val_mut_copy(adoc, (yyjson_val *)sub));
-            }
+            yyjson_mut_val *outer = yyjson_mut_arr(adoc);
+            yyjson_mut_doc_set_root(adoc, outer);
+            yyjson_mut_arr_append(outer, yyjson_val_mut_copy(adoc, (yyjson_val *)elem));
 
             yyjson_write_err werr;
             char *args_str = yyjson_mut_write_opts(adoc, 0, NULL, NULL, &werr);
             yyjson_mut_doc_free(adoc);
             if (!args_str) {
-                jisp_fatal(doc, "failed to serialize args for %s: %s", op_name ? op_name : "(null)", werr.msg ? werr.msg : "unknown");
+                jisp_fatal(doc, "failed to serialize array literal: %s", werr.msg ? werr.msg : "unknown");
             }
 
-            ins[cnt].op = op;
+            ins[cnt].op = push_value;
             ins[cnt].args_json = args_str;
             cnt++;
         } else {
-            jisp_fatal(doc, "entrypoint element at index %zu is not a string or number", cnt);
+            jisp_fatal(doc, "entrypoint element at index %zu is not a string, number, or array", cnt);
         }
     }
 

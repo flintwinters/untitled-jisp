@@ -66,7 +66,7 @@ API/Code changes
 
 Migration impact
 - C-defined instruction sequences change to token arrays.
-- Entrypoint JSON still works for existing simple cases (strings and numbers). For ops needing explicit args within entrypoint, use ["op_name", ...args] form.
+- Entrypoint JSON supports strings, numbers, and arrays as literals only; no legacy ["op_name", ...args] interpretation.
 
 Next steps (upon approval)
 - Implement typedef/signature changes and registry updates.
