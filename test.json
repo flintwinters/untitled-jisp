@@ -3,7 +3,9 @@
     "temp_sum": 0,
     "temp_mult": 0,
     "final_result": 0,
-    "entrypoint": ["print_json"],
+    "entrypoint": [
+        "push_value"
+    ],
     "user": {
         "profile": {
             "age": 42,
