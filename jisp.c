@@ -509,20 +509,19 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
 
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
         if (yyjson_mut_is_str(elem)) {
-            const char *name = yyjson_get_str((yyjson_val *)elem);
-            jisp_op op = jisp_op_registry_get(name);
-            if (!op) {
-                jisp_fatal(doc, "Unknown entrypoint op: %s", name ? name : "(null)");
-            }
-            op(doc);
+            /* Push string literal by deep-copy */
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
         } else if (yyjson_is_num((yyjson_val *)elem)) {
             /* Push number literal by deep-copy */
             yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
         } else if (yyjson_mut_is_arr(elem)) {
             /* Push array literal by deep-copy */
             yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
+        } else if (yyjson_mut_is_obj(elem)) {
+            /* Push object literal by deep-copy */
+            yyjson_mut_arr_append(stack, yyjson_val_mut_copy(doc, (yyjson_val *)elem));
         } else {
-            jisp_fatal(doc, "entrypoint element is not a string, number, or array");
+            jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
     }
 }
