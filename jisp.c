@@ -980,10 +980,6 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
 
     size_t idx = 0;
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
-        char current_path[512];
-        snprintf(current_path, sizeof(current_path), "%s/%zu", path_prefix, idx);
-        yyjson_mut_arr_add_strcpy(doc, pointer_stack, current_path);
-
         if (yyjson_mut_is_str(elem)) {
             jisp_stack_push_copy_and_log(doc, stack, elem);
         } else if (yyjson_is_num((yyjson_val *)elem)) {
@@ -995,9 +991,15 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
             yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
             if (dot) {
                 if (yyjson_mut_is_arr(dot)) {
+                    char current_path[512];
+                    snprintf(current_path, sizeof(current_path), "%s/%zu", path_prefix, idx);
+                    yyjson_mut_arr_add_strcpy(doc, pointer_stack, current_path);
+
                     char nested_path[1024];
                     snprintf(nested_path, sizeof(nested_path), "%s/.", current_path);
                     process_ep_array(doc, dot, nested_path);
+
+                    yyjson_mut_arr_remove_last(pointer_stack);
                 } else if (yyjson_mut_is_str(dot)) {
                     const char *name = yyjson_get_str((yyjson_val *)dot);
                     jisp_op op = jisp_op_registry_get(name);
@@ -1016,8 +1018,6 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
-
-        yyjson_mut_arr_remove_last(pointer_stack);
         idx++;
     }
 }
