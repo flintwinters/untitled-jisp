@@ -90,6 +90,19 @@ static yyjson_mut_val *get_stack_or_fatal(yyjson_mut_doc *doc, const char *ctx) 
     return stack;
 }
 
+/* get_pointer_stack_or_fatal: Fetches root["pointer_stack"] as an array, creating if absent. */
+static yyjson_mut_val *get_pointer_stack_or_fatal(yyjson_mut_doc *doc, const char *ctx) {
+    yyjson_mut_val *root = get_root_or_fatal(doc, ctx);
+    yyjson_mut_val *pointer_stack = yyjson_mut_obj_get(root, "pointer_stack");
+    if (!pointer_stack) {
+        pointer_stack = yyjson_mut_arr(doc);
+        yyjson_mut_obj_add_val(doc, root, "pointer_stack", pointer_stack);
+    } else if (!yyjson_mut_is_arr(pointer_stack)) {
+        jisp_fatal(doc, "%s: 'pointer_stack' is not an array", ctx ? ctx : "operation");
+    }
+    return pointer_stack;
+}
+
 /* JISP op function signature (no explicit args) */
 typedef void (*jisp_op)(yyjson_mut_doc *doc);
 
@@ -952,19 +965,25 @@ static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) 
 }
 
 /* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
-static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
+static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char *path_prefix) {
     if (!doc || !ep) return;
     if (!yyjson_mut_is_arr(ep)) {
         jisp_fatal(doc, "entrypoint must be an array");
     }
 
     yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_entrypoint");
+    yyjson_mut_val *pointer_stack = get_pointer_stack_or_fatal(doc, "process_entrypoint");
 
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
     if (!yyjson_mut_arr_iter_init(ep, &it)) return;
 
+    size_t idx = 0;
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
+        char current_path[512];
+        snprintf(current_path, sizeof(current_path), "%s/%zu", path_prefix, idx);
+        yyjson_mut_arr_add_strcpy(doc, pointer_stack, current_path);
+
         if (yyjson_mut_is_str(elem)) {
             jisp_stack_push_copy_and_log(doc, stack, elem);
         } else if (yyjson_is_num((yyjson_val *)elem)) {
@@ -976,7 +995,9 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
             yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
             if (dot) {
                 if (yyjson_mut_is_arr(dot)) {
-                    process_ep_array(doc, dot);
+                    char nested_path[1024];
+                    snprintf(nested_path, sizeof(nested_path), "%s/.", current_path);
+                    process_ep_array(doc, dot, nested_path);
                 } else if (yyjson_mut_is_str(dot)) {
                     const char *name = yyjson_get_str((yyjson_val *)dot);
                     jisp_op op = jisp_op_registry_get(name);
@@ -995,6 +1016,9 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep) {
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
+
+        yyjson_mut_arr_remove_last(pointer_stack);
+        idx++;
     }
 }
 
@@ -1005,7 +1029,7 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     if (!root) return;
     yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
     if (!ep) return;
-    process_ep_array(doc, ep);
+    process_ep_array(doc, ep, "/entrypoint");
 }
 
 /* main: Orchestrates program flow from input file to execution and output; run as the CLI entry point. */
