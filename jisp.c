@@ -1002,12 +1002,34 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
                     yyjson_mut_arr_remove_last(pointer_stack);
                 } else if (yyjson_mut_is_str(dot)) {
                     const char *name = yyjson_get_str((yyjson_val *)dot);
-                    jisp_op op = jisp_op_registry_get(name);
-                    if (op) {
-                        op(doc);
+                    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+                    yyjson_mut_val *target_array = yyjson_mut_obj_get(root, name);
+
+                    if (target_array && yyjson_mut_is_arr(target_array)) {
+                        // This is a nested entrypoint call to a root-level array
+                        char target_path[512];
+                        snprintf(target_path, sizeof(target_path), "/%s", name);
+
+                        // Push current execution path (return address) to pointer_stack
+                        char current_exec_path[512];
+                        snprintf(current_exec_path, sizeof(current_exec_path), "%s/%zu", path_prefix, idx);
+                        yyjson_mut_arr_add_strcpy(doc, pointer_stack, current_exec_path);
+
+                        // Recursively process the target array
+                        process_ep_array(doc, target_array, target_path);
+
+                        // Pop return address from pointer_stack
+                        yyjson_mut_arr_remove_last(pointer_stack);
+
                     } else {
-                        /* Unknown op name; treat the object as a literal */
-                        yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+                        // Fallback to existing opcode lookup
+                        jisp_op op = jisp_op_registry_get(name);
+                        if (op) {
+                            op(doc);
+                        } else {
+                            /* Unknown op name; treat the object as a literal */
+                            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+                        }
                     }
                 } else {
                     jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
