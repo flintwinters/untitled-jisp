@@ -264,11 +264,11 @@ static void jpm_doc_release(yyjson_mut_doc *doc) {
 }
 
 
-/* 
-   Simple JSON Pointer Monad (minimal step):
-   - Adds jpm_status, jpm_ptr struct, and helper functions.
-   - Implements a tiny jpm_return that only supports resolving the root path "/".
-   - Provides jpm_ptr_release to balance successful jpm_return retains.
+/*
+   JSON Pointer Handle (non-monadic):
+   - Provides jpm_ptr {doc, val, path} to track a raw yyjson pointer with optional RFC 6901 path metadata.
+   - jpm_return resolves a path and returns a handle to the existing value without copying; the doc may be retained.
+   - jpm_ptr_release decrements the doc refcount; no combinators (bind/map) are provided.
 */
 
 typedef enum jpm_status {
@@ -340,47 +340,8 @@ static void jpm_ptr_release(jpm_ptr *p) {
     p->path = NULL;
 }
 
-/* Bind/Map API (minimal scaffolding) */
-typedef jpm_status (*jpm_fn)(jpm_ptr in, jpm_ptr *out, void *ctx);
-typedef jpm_status (*jpm_map_fn)(jpm_ptr in, void *ctx);
-
-static jpm_status jpm_bind(jpm_ptr in, jpm_fn f, void *ctx, jpm_ptr *out) {
-    if (!f || !out) return JPM_ERR_INVALID_ARG;
-    if (!jpm_is_valid(in)) {
-        out->doc = in.doc;
-        out->val = NULL;
-        out->path = NULL;
-        return JPM_ERR_NOT_FOUND;
-    }
-    return f(in, out, ctx);
-}
-
-static jpm_status jpm_map(jpm_ptr in, jpm_map_fn f, void *ctx, jpm_ptr *out) {
-    if (!f || !out) return JPM_ERR_INVALID_ARG;
-    jpm_status st = f(in, ctx);
-    if (st == JPM_OK) {
-        *out = in;
-    } else {
-        out->doc = in.doc;
-        out->val = NULL;
-        out->path = in.path;
-    }
-    return st;
-}
-
-/* Simple helper used in tests: select a path relative to the same document. */
-static jpm_status jpm_select_path(jpm_ptr in, jpm_ptr *out, void *ctx) {
-    const char *path = (const char *)ctx;
-    if (!path) return JPM_ERR_INVALID_ARG;
-    return jpm_return(in.doc, path, out);
-}
-
-/* Simple mapper used in tests: check that the stored path equals "/". */
-static jpm_status jpm_check_path_is_root(jpm_ptr in, void *ctx) {
-    const char *pth = jpm_path(in);
-    if (!pth || strcmp(pth, "/") != 0) return JPM_ERR_INVALID_ARG;
-    return JPM_OK;
-}
+/* No monadic combinators: pointers are raw handles with optional path metadata.
+   Resolve explicitly with jpm_return(...) when needed. */
 
 /* Deep copy a yyjson_mut_val within the same document. */
 static yyjson_mut_val *jisp_mut_deep_copy(yyjson_mut_doc *doc, yyjson_mut_val *val) {

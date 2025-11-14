@@ -54,8 +54,8 @@ All ops validate inputs and use jisp_fatal(...) on errors. Fatal output includes
 5) Deep-copy helper
 - jisp_mut_deep_copy(doc, val) deep-copies a yyjson_mut_val within the same document; used by duplicate_top and entrypoint literal handling.
 
-6) JSON Pointer Monad (JPM)
-- Data types: jpm_ptr { doc, val, path }, jpm_status enum, and combinators jpm_bind/jpm_map.
+6) JSON Pointer Handle (JPM)
+- Data types: jpm_ptr { doc, val, path }, jpm_status enum; no combinators.
 - Path resolution: jpm_return(doc, "/rfc6901/path", &out)
   - Uses yyjson_mut_ptr_get for RFC 6901 semantics, including "~0" and "~1" decoding.
   - On success, retains the document and returns a handle to the target yyjson_mut_val.

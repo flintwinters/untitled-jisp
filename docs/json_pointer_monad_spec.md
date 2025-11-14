@@ -1,4 +1,4 @@
-# Raw C Pointer JSON Monad Spec (yyjson-based)
+# Raw C Pointer JSON Handle Spec (yyjson-based)
 
 This document specifies a lightweight “pointer monad” that represents references to JSON values inside a yyjson mutable document via raw C pointers. It provides a safe-ish and composable way to resolve human-readable JSON Pointer paths (RFC 6901, e.g., "/path/to/obj") into raw C pointers and to sequence computations over those pointers in a monadic style.
 
@@ -8,7 +8,7 @@ Scope:
 - Primary use within a single yyjson_mut_doc lifetime.
 - Works on mutable values (yyjson_mut_val *).
 - Integrates with C code (no dynamic dispatching required).
-- Composable “bind” operator to chain pointer-based computations.
+- No monadic combinators; resolve paths explicitly when needed.
 
 Non-goals:
 - Serialization of raw pointers.
@@ -83,20 +83,10 @@ jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *ou
 - Errors: `JPM_ERR_NOT_FOUND` if path does not exist; `JPM_ERR_INVALID_ARG` if inputs are NULL or path invalid.
 
 Bind:
-```c
-/* Monadic bind: apply `f` to `in`, yielding `out`. */
-jpm_status jpm_bind(jpm_ptr in, jpm_fn f, void *ctx, jpm_ptr *out);
-```
-- If `in.val == NULL`, returns `JPM_ERR_NOT_FOUND` and leaves `out` invalid.
-- `f` may read/modify `in.doc`/`in.val` and produce a new pointer (possibly the same `val`).
+Removed. This design does not provide monadic combinators; resolve paths explicitly via jpm_return or dedicated helpers.
 
-Map (sugar over bind for read-only transforms that do not change the pointer target):
-```c
-typedef jpm_status (*jpm_map_fn)(jpm_ptr in, void *ctx);
-
-/* Apply `f` to `in` without changing the pointer target; returns the same pointer on success. */
-jpm_status jpm_map(jpm_ptr in, jpm_map_fn f, void *ctx, jpm_ptr *out);
-```
+Map:
+Removed. See above.
 
 Destruction/release:
 ```c
@@ -250,8 +240,7 @@ typedef enum jpm_status {
     JPM_ERR_INTERNAL
 } jpm_status;
 
-typedef jpm_status (*jpm_fn)(jpm_ptr in, jpm_ptr *out, void *ctx);
-typedef jpm_status (*jpm_map_fn)(jpm_ptr in, void *ctx);
+/* Monadic combinators removed in the handle model. */
 
 bool jpm_is_valid(jpm_ptr p);
 const char *jpm_path(jpm_ptr p);
@@ -262,10 +251,8 @@ yyjson_mut_doc *jpm_doc_retain(yyjson_mut_doc *d);
 void jpm_doc_release(yyjson_mut_doc *d);
 void jpm_ptr_release(jpm_ptr *p);
 
-/* Monad APIs */
+/* Handle API */
 jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *out);
-jpm_status jpm_bind(jpm_ptr in, jpm_fn f, void *ctx, jpm_ptr *out);
-jpm_status jpm_map(jpm_ptr in, jpm_map_fn f, void *ctx, jpm_ptr *out);
 
 #endif /* JPM_PTR_H */
 ```
