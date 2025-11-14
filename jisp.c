@@ -72,17 +72,17 @@ static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const
     exit(1);
 }
 
-/* get_root_or_fatal: Ensures the document has a root value; use in ops and interpreters that require a valid root object. */
-static yyjson_mut_val *get_root_or_fatal(yyjson_mut_doc *doc, const char *ctx) {
+/* get_root_fallible: Ensures the document has a root value; use in ops and interpreters that require a valid root object. */
+static yyjson_mut_val *get_root_fallible(yyjson_mut_doc *doc, const char *ctx) {
     if (!doc) jisp_fatal(NULL, "%s: null document", ctx ? ctx : "operation");
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     if (!root) jisp_fatal(doc, "%s: missing root", ctx ? ctx : "operation");
     return root;
 }
 
-/* get_stack_or_fatal: Fetches root["stack"] as an array; use when an operation requires a well-formed stack. */
-static yyjson_mut_val *get_stack_or_fatal(yyjson_mut_doc *doc, const char *ctx) {
-    yyjson_mut_val *root = get_root_or_fatal(doc, ctx);
+/* get_stack_fallible: Fetches root["stack"] as an array; use when an operation requires a well-formed stack. */
+static yyjson_mut_val *get_stack_fallible(yyjson_mut_doc *doc, const char *ctx) {
+    yyjson_mut_val *root = get_root_fallible(doc, ctx);
     yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
     if (!stack || !yyjson_mut_is_arr(stack)) {
         jisp_fatal(doc, "%s: missing or non-array 'stack'", ctx ? ctx : "operation");
@@ -90,9 +90,9 @@ static yyjson_mut_val *get_stack_or_fatal(yyjson_mut_doc *doc, const char *ctx) 
     return stack;
 }
 
-/* get_pointer_stack_or_fatal: Fetches root["pointer_stack"] as an array, creating if absent. */
-static yyjson_mut_val *get_pointer_stack_or_fatal(yyjson_mut_doc *doc, const char *ctx) {
-    yyjson_mut_val *root = get_root_or_fatal(doc, ctx);
+/* get_pointer_stack_fallible: Fetches root["pointer_stack"] as an array, creating if absent. */
+static yyjson_mut_val *get_pointer_stack_fallible(yyjson_mut_doc *doc, const char *ctx) {
+    yyjson_mut_val *root = get_root_fallible(doc, ctx);
     yyjson_mut_val *pointer_stack = yyjson_mut_obj_get(root, "pointer_stack");
     if (!pointer_stack) {
         pointer_stack = yyjson_mut_arr(doc);
@@ -130,11 +130,13 @@ typedef struct jisp_tok {
 } jisp_tok;
 
 static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count);
+static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char *path_prefix);
 
 /* JISP op forward declarations for registry */
 void pop_and_store(yyjson_mut_doc *doc);
 void duplicate_top(yyjson_mut_doc *doc);
 void add_two_top(yyjson_mut_doc *doc);
+void map_over(yyjson_mut_doc *doc);
 void calculate_final_result(yyjson_mut_doc *doc);
 void print_json(yyjson_mut_doc *doc);
 void undo_last_residual(yyjson_mut_doc *doc);
@@ -146,7 +148,8 @@ typedef enum jisp_op_id {
     JISP_OP_ADD_TWO_TOP = 3,
     JISP_OP_CALCULATE_FINAL_RESULT = 4,
     JISP_OP_PRINT_JSON = 5,
-    JISP_OP_UNDO_LAST_RESIDUAL = 6
+    JISP_OP_UNDO_LAST_RESIDUAL = 6,
+    JISP_OP_MAP_OVER = 7
 } jisp_op_id;
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
@@ -159,6 +162,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_CALCULATE_FINAL_RESULT: return calculate_final_result;
         case JISP_OP_PRINT_JSON: return print_json;
         case JISP_OP_UNDO_LAST_RESIDUAL: return undo_last_residual;
+        case JISP_OP_MAP_OVER: return map_over;
         default: return NULL;
     }
 }
@@ -174,6 +178,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "calculate_final_result", JISP_OP_CALCULATE_FINAL_RESULT);
     yyjson_mut_obj_add_int(d, root, "print_json", JISP_OP_PRINT_JSON);
     yyjson_mut_obj_add_int(d, root, "undo_last_residual", JISP_OP_UNDO_LAST_RESIDUAL);
+    yyjson_mut_obj_add_int(d, root, "map_over", JISP_OP_MAP_OVER);
     g_jisp_op_registry = d;
 }
 
@@ -682,8 +687,8 @@ static void jisp_stack_log_remove_last(yyjson_mut_doc *doc, yyjson_mut_val *stac
 // 
 /* pop_and_store: Stores a value under a key from the stack into the document; use when a [value, key] pair has been prepared on the stack. */
 void pop_and_store(yyjson_mut_doc *doc) {
-    yyjson_mut_val *root = get_root_or_fatal(doc, "pop_and_store");
-    yyjson_mut_val *stack = get_stack_or_fatal(doc, "pop_and_store");
+    yyjson_mut_val *root = get_root_fallible(doc, "pop_and_store");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "pop_and_store");
     if (yyjson_mut_arr_size(stack) < 2) {
         jisp_fatal(doc, "pop_and_store: need at least [value, key] on stack");
     }
@@ -717,7 +722,7 @@ void pop_and_store(yyjson_mut_doc *doc) {
 
 /* duplicate_top: Duplicates the top stack value to model a pure stack operation; use to preserve and copy the current top. */
 void duplicate_top(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_or_fatal(doc, "duplicate_top");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "duplicate_top");
     if (yyjson_mut_arr_size(stack) == 0) {
         jisp_fatal(doc, "duplicate_top: stack is empty");
     }
@@ -738,7 +743,7 @@ void duplicate_top(yyjson_mut_doc *doc) {
 
 /* add_two_top: Adds the two topmost numeric values and pushes the sum; use for simple arithmetic over the stack. */
 void add_two_top(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_or_fatal(doc, "add_two_top");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "add_two_top");
     if (yyjson_mut_arr_size(stack) < 2) {
         jisp_fatal(doc, "add_two_top: need at least two values on stack");
     }
@@ -772,6 +777,65 @@ void add_two_top(yyjson_mut_doc *doc) {
     double sum = val1 + val2;
     yyjson_mut_arr_add_real(doc, stack, sum);
     residual_group_add_patch_with_real(doc, group, "add", "/stack/-", sum);
+
+    if (group) residual_group_commit(doc, group);
+}
+
+void map_over(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "map_over");
+    if (yyjson_mut_arr_size(stack) < 2) {
+        jisp_fatal(doc, "map_over: need at least [data_array, function_array] on stack");
+    }
+
+    yyjson_mut_val *group = residual_group_begin(doc);
+
+    size_t sz = yyjson_mut_arr_size(stack);
+    char path_func[64];
+    snprintf(path_func, sizeof(path_func), "/stack/%zu", sz - 1);
+    yyjson_mut_val *function_array = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path_func, function_array);
+
+    if (!function_array || !yyjson_mut_is_arr(function_array)) {
+        jisp_fatal(doc, "map_over: top of stack must be a function array");
+    }
+
+    sz = yyjson_mut_arr_size(stack);
+    char path_data[64];
+    snprintf(path_data, sizeof(path_data), "/stack/%zu", sz - 1);
+    yyjson_mut_val *data_array = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path_data, data_array);
+
+    if (!data_array || !yyjson_mut_is_arr(data_array)) {
+        jisp_fatal(doc, "map_over: second item on stack must be a data array");
+    }
+
+    yyjson_mut_val *result_array = yyjson_mut_arr(doc);
+    if (!result_array) {
+        jisp_fatal(doc, "map_over: failed to create result array");
+    }
+
+    yyjson_mut_arr_iter it;
+    yyjson_mut_val *data_point;
+    yyjson_mut_arr_iter_init(data_array, &it);
+
+    size_t original_stack_size = yyjson_mut_arr_size(stack);
+
+    while ((data_point = yyjson_mut_arr_iter_next(&it))) {
+        yyjson_mut_val *data_copy = jisp_mut_deep_copy(doc, data_point);
+        yyjson_mut_arr_append(stack, data_copy);
+
+        process_ep_array(doc, function_array, "/map_over/function");
+
+        if (yyjson_mut_arr_size(stack) != original_stack_size + 1) {
+            jisp_fatal(doc, "map_over: function must consume its argument and produce exactly one result on the stack. Stack size mismatch.");
+        }
+
+        yyjson_mut_val *result_element = yyjson_mut_arr_remove_last(stack);
+        yyjson_mut_arr_append(result_array, result_element);
+    }
+
+    yyjson_mut_arr_append(stack, result_array);
+    residual_group_add_patch_with_val(doc, group, "add", "/stack/-", result_array);
 
     if (group) residual_group_commit(doc, group);
 }
@@ -937,7 +1001,7 @@ void undo_last_residual(yyjson_mut_doc *doc) {
 /* run_tokens: Executes a sequence of tokens against the JSON stack; use to run small programs where ops manipulate root["stack"]. */
 static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) {
     if (!doc || !toks) return;
-    yyjson_mut_val *stack = get_stack_or_fatal(doc, "run_tokens");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "run_tokens");
 
     for (size_t i = 0; i < count; i++) {
         jisp_tok t = toks[i];
@@ -971,8 +1035,8 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
         jisp_fatal(doc, "entrypoint must be an array");
     }
 
-    yyjson_mut_val *stack = get_stack_or_fatal(doc, "process_entrypoint");
-    yyjson_mut_val *pointer_stack = get_pointer_stack_or_fatal(doc, "process_entrypoint");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "process_entrypoint");
+    yyjson_mut_val *pointer_stack = get_pointer_stack_fallible(doc, "process_entrypoint");
 
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
