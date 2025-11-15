@@ -257,4 +257,4 @@ jpm_status jpm_return(yyjson_mut_doc *doc, const char *rfc6901_path, jpm_ptr *ou
 #endif /* JPM_PTR_H */
 ```
 
-This spec defines the semantics and API surface to build a raw C pointer JSON monad over yyjson. The concrete implementation may live in a small C module (e.g., `jpm_ptr.c`) and optionally expose a JISP opcode layer to integrate with your existing stack-based execution model.
+This spec defines the semantics and API surface to build a raw C pointer handle over yyjson. The concrete implementation may live in a small C module (e.g., `jpm_ptr.c`) and optionally expose a JISP opcode layer to integrate with your existing stack-based execution model.
