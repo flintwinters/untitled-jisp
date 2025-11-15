@@ -126,6 +126,9 @@ void duplicate_top(yyjson_mut_doc *doc);
 void add_two_top(yyjson_mut_doc *doc);
 void map_over(yyjson_mut_doc *doc);
 void calculate_final_result(yyjson_mut_doc *doc);
+void json_get(yyjson_mut_doc *doc);
+void json_set(yyjson_mut_doc *doc);
+void json_append(yyjson_mut_doc *doc);
 void print_json(yyjson_mut_doc *doc);
 void undo_last_residual(yyjson_mut_doc *doc);
 
@@ -137,7 +140,10 @@ typedef enum jisp_op_id {
     JISP_OP_CALCULATE_FINAL_RESULT = 4,
     JISP_OP_PRINT_JSON = 5,
     JISP_OP_UNDO_LAST_RESIDUAL = 6,
-    JISP_OP_MAP_OVER = 7
+    JISP_OP_MAP_OVER = 7,
+    JISP_OP_GET = 8,
+    JISP_OP_SET = 9,
+    JISP_OP_APPEND = 10
 } jisp_op_id;
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
@@ -151,6 +157,9 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_PRINT_JSON: return print_json;
         case JISP_OP_UNDO_LAST_RESIDUAL: return undo_last_residual;
         case JISP_OP_MAP_OVER: return map_over;
+        case JISP_OP_GET: return json_get;
+        case JISP_OP_SET: return json_set;
+        case JISP_OP_APPEND: return json_append;
         default: return NULL;
     }
 }
@@ -167,6 +176,9 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "print_json", JISP_OP_PRINT_JSON);
     yyjson_mut_obj_add_int(d, root, "undo_last_residual", JISP_OP_UNDO_LAST_RESIDUAL);
     yyjson_mut_obj_add_int(d, root, "map_over", JISP_OP_MAP_OVER);
+    yyjson_mut_obj_add_int(d, root, "get", JISP_OP_GET);
+    yyjson_mut_obj_add_int(d, root, "set", JISP_OP_SET);
+    yyjson_mut_obj_add_int(d, root, "append", JISP_OP_APPEND);
     g_jisp_op_registry = d;
 }
 
@@ -836,6 +848,191 @@ void calculate_final_result(yyjson_mut_doc *doc) {
     } else {
         record_patch_add_real(doc, "/final_result", final_result);
     }
+}
+
+/* json_get: Pops a RFC 6901 path string and pushes the deep-copied value found at that path. */
+void json_get(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = get_root_fallible(doc, "get");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "get");
+    if (yyjson_mut_arr_size(stack) < 1) {
+        jisp_fatal(doc, "get: need at least [path] on stack");
+    }
+
+    yyjson_mut_val *group = residual_group_begin(doc);
+
+    size_t sz = yyjson_mut_arr_size(stack);
+    char path_idx[64];
+    snprintf(path_idx, sizeof(path_idx), "/stack/%zu", sz - 1);
+    yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path_idx, path_val);
+
+    if (!yyjson_mut_is_str(path_val)) {
+        jisp_fatal(doc, "get: path must be a string");
+    }
+    const char *path = yyjson_get_str((yyjson_val *)path_val);
+
+    yyjson_mut_val *target = NULL;
+    if (strcmp(path, "/") == 0) {
+        target = root;
+    } else {
+        target = yyjson_mut_ptr_get(root, path);
+    }
+    if (!target) {
+        jisp_fatal(doc, "get: path not found: %s", path);
+    }
+
+    yyjson_mut_val *copy = jisp_mut_deep_copy(doc, target);
+    if (!copy) {
+        jisp_fatal(doc, "get: failed to copy value");
+    }
+    yyjson_mut_arr_append(stack, copy);
+    residual_group_add_patch_with_val(doc, group, "add", "/stack/-", copy);
+
+    if (group) residual_group_commit(doc, group);
+}
+
+/* json_set: Pops [value, path] (top is path) and replaces the value at that path (scalars only). */
+void json_set(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = get_root_fallible(doc, "set");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "set");
+    if (yyjson_mut_arr_size(stack) < 2) {
+        jisp_fatal(doc, "set: need at least [value, path] on stack");
+    }
+
+    yyjson_mut_val *group = residual_group_begin(doc);
+
+    /* Pop path */
+    size_t sz = yyjson_mut_arr_size(stack);
+    char path_idx[64];
+    snprintf(path_idx, sizeof(path_idx), "/stack/%zu", sz - 1);
+    yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path_idx, path_val);
+    if (!yyjson_mut_is_str(path_val)) {
+        jisp_fatal(doc, "set: path must be a string");
+    }
+    const char *path = yyjson_get_str((yyjson_val *)path_val);
+
+    /* Pop value */
+    sz = yyjson_mut_arr_size(stack);
+    char val_idx[64];
+    snprintf(val_idx, sizeof(val_idx), "/stack/%zu", sz - 1);
+    yyjson_mut_val *value = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", val_idx, value);
+
+    /* Resolve target */
+    yyjson_mut_val *target = NULL;
+    if (strcmp(path, "/") == 0) {
+        target = root;
+    } else {
+        target = yyjson_mut_ptr_get(root, path);
+    }
+    if (!target) {
+        jisp_fatal(doc, "set: path not found: %s", path);
+    }
+
+    /* Only allow scalar assignments for now. */
+    yyjson_type vt = unsafe_yyjson_get_type(value);
+    switch (vt) {
+        case YYJSON_TYPE_NULL: {
+            unsafe_yyjson_set_tag(target, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
+            break;
+        }
+        case YYJSON_TYPE_BOOL: {
+            bool b = yyjson_get_bool((yyjson_val *)value);
+            unsafe_yyjson_set_bool(target, b);
+            break;
+        }
+        case YYJSON_TYPE_NUM: {
+            int64_t n = (int64_t)yyjson_mut_get_sint(value);
+            unsafe_yyjson_set_sint(target, n);
+            break;
+        }
+        case YYJSON_TYPE_STR: {
+            const char *s = unsafe_yyjson_get_str(value);
+            size_t slen = unsafe_yyjson_get_len(value);
+            char *dup = unsafe_yyjson_mut_strncpy(doc, s ? s : "", s ? slen : 0);
+            if (!dup) {
+                jisp_fatal(doc, "set: out of memory duplicating string");
+            }
+            unsafe_yyjson_set_strn(target, dup, s ? slen : 0);
+            break;
+        }
+        default:
+            jisp_fatal(doc, "set: value must be a scalar (null, bool, number, or string)");
+    }
+
+    /* Record replace at path with provided value */
+    residual_group_add_patch_with_val(doc, group, "replace", path, value);
+
+    if (group) residual_group_commit(doc, group);
+}
+
+/* json_append: Pops [value, path] (top is path) and appends value to array at path. */
+void json_append(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = get_root_fallible(doc, "append");
+    yyjson_mut_val *stack = get_stack_fallible(doc, "append");
+    if (yyjson_mut_arr_size(stack) < 2) {
+        jisp_fatal(doc, "append: need at least [value, path] on stack");
+    }
+
+    yyjson_mut_val *group = residual_group_begin(doc);
+
+    /* Pop path */
+    size_t sz = yyjson_mut_arr_size(stack);
+    char path_idx[64];
+    snprintf(path_idx, sizeof(path_idx), "/stack/%zu", sz - 1);
+    yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", path_idx, path_val);
+    if (!yyjson_mut_is_str(path_val)) {
+        jisp_fatal(doc, "append: path must be a string");
+    }
+    const char *path = yyjson_get_str((yyjson_val *)path_val);
+
+    /* Pop value */
+    sz = yyjson_mut_arr_size(stack);
+    char val_idx[64];
+    snprintf(val_idx, sizeof(val_idx), "/stack/%zu", sz - 1);
+    yyjson_mut_val *value = yyjson_mut_arr_remove_last(stack);
+    residual_group_add_patch_with_val(doc, group, "remove", val_idx, value);
+
+    /* Resolve array */
+    yyjson_mut_val *arr = NULL;
+    if (strcmp(path, "/") == 0) {
+        arr = root;
+    } else {
+        arr = yyjson_mut_ptr_get(root, path);
+    }
+    if (!arr || !yyjson_mut_is_arr(arr)) {
+        jisp_fatal(doc, "append: path must resolve to an array");
+    }
+
+    /* Append deep copy */
+    yyjson_mut_val *copy = jisp_mut_deep_copy(doc, value);
+    if (!copy) {
+        jisp_fatal(doc, "append: failed to copy value");
+    }
+    yyjson_mut_arr_append(arr, copy);
+
+    /* Build append path "<path>/-" (root "/" special-cased to "/-") */
+    size_t plen = strlen(path);
+    size_t out_len = (strcmp(path, "/") == 0 ? 2 : plen + 2);
+    char *apath = (char *)malloc(out_len + 1);
+    if (!apath) {
+        jisp_fatal(doc, "append: out of memory building patch path");
+    }
+    if (strcmp(path, "/") == 0) {
+        strcpy(apath, "/-");
+    } else {
+        memcpy(apath, path, plen);
+        apath[plen] = '/';
+        apath[plen + 1] = '-';
+        apath[plen + 2] = '\0';
+    }
+
+    residual_group_add_patch_with_val(doc, group, "add", apath, value);
+    free(apath);
+
+    if (group) residual_group_commit(doc, group);
 }
 
 /* print_json: Displays the current document contents; use at the end of execution or for user-facing inspection. */
