@@ -105,3 +105,32 @@ All ops validate inputs and use jisp_fatal(...) on errors. Fatal output includes
 - Deep copies are performed when pushing literals to preserve isolation from later mutations.
 
 This document supersedes the older refactor plan and describes the authoritative current behavior and the short list of open tasks.
+
+## Current use of the JPM pointer handle (a.k.a. "monad")
+
+- Implementation scope:
+  - Implemented locally in jisp.c as static helpers/types: jpm_status, jpm_ptr { doc, val, path }, jpm_is_valid, jpm_path, jpm_value, jpm_return, jpm_ptr_release, and document retain/release helpers jpm_doc_retain/jpm_doc_release (root["ref"]-based).
+  - Not exposed via a separate header; only available internally.
+
+- Resolution behavior:
+  - jpm_return(doc, path, out) resolves RFC 6901 paths using yyjson_mut_ptr_get(root, path) with a special-case for "/" returning the root.
+  - On success, it retains the document (increments root["ref"]), sets out->val to the resolved yyjson_mut_val*, and out->path to the provided path pointer (not copied).
+
+- Lifecycle management:
+  - jpm_ptr_release(&p) decrements root["ref"] via jpm_doc_release and NULLs the handle; when refcount hits zero, the document is freed.
+  - Main currently still frees the doc with yyjson_mut_doc_free(doc) directly at shutdown; reference counting is not yet wired into the program end.
+
+- Runtime integration status:
+  - No ops or entrypoint code paths use jpm_return today.
+  - The token interpreter defines a JISP_TOK_JPM kind but explicitly rejects it with a fatal error (“JPM tokens not yet supported in run_tokens”).
+  - There is no pointer stack; JPM handles are not mixed with the JSON value stack yet.
+  - As a result, JPM exists as a ready-to-use utility layer but is not exercised during normal execution.
+
+- Safety and invariants:
+  - Handles are valid only while p.doc is alive; path is optional and treated as borrowed.
+  - No monadic combinators are provided; resolve explicitly when needed.
+
+- Next integration steps (unchanged from TODOs):
+  - Add a pointer stack and support JISP_TOK_JPM in run_tokens.
+  - Introduce ptr_get/ptr_set ops or equivalents to bridge between pointer handles and the JSON stack.
+  - Replace final direct frees with jpm_doc_release at program shutdown and ensure balanced retains.
