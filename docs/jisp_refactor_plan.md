@@ -3,7 +3,7 @@
 This document reflects the current, implemented state of the JISP runtime in C (see jisp.c) and the remaining TODOs. The original “refactor plan” has been largely completed and the runtime now runs on:
 - A token-union instruction stream with an implicit-argument stack in JSON.
 - A small set of stack-based ops.
-- A JSON Pointer monad (JPM) for pointer semantics with document-level reference counting.
+- A JSON Pointer handle (JPM) for pointer semantics with document-level reference counting.
 
 The sections below describe what is implemented, current semantics, and what remains.
 

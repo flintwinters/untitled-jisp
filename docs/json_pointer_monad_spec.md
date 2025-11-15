@@ -19,11 +19,11 @@ Non-goals:
 
 - JSON Pointer: RFC 6901 string such as "/a/b/0" (with "~0" = "~", "~1" = "/").
 - Target value: The yyjson_mut_val * resolved from a path within a document.
-- Pointer monad value: A small struct that holds (doc, val) and optional metadata.
+- Pointer handle value: A small struct that holds (doc, val) and optional metadata.
 
 ## Invariants and Safety
 
-- A pointer monad’s yyjson_mut_val * is only valid while its associated yyjson_mut_doc remains alive.
+- A pointer handle’s yyjson_mut_val * is only valid while its associated yyjson_mut_doc remains alive.
 - The document’s root JSON object carries an integer field "ref" for reference counting; creation increments it and release decrements it.
 - When the "ref" count reaches zero, the implementation frees the underlying yyjson_mut_doc; pointers become invalid immediately thereafter.
 - Operations that allocate more values (e.g., adding keys/elements) should not invalidate existing pointers in yyjson’s arena-based allocator, but the implementation must not assume relocations can never occur outside yyjson guarantees.
@@ -71,7 +71,7 @@ Notes:
 
 ## API
 
-Initialization (“return”):
+Resolve:
 ```c
 /* Resolve a JSON Pointer path into a pointer monad (doc + val).
    On success, retains the document (increments refcount). */

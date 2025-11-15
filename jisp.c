@@ -90,18 +90,6 @@ static yyjson_mut_val *get_stack_fallible(yyjson_mut_doc *doc, const char *ctx) 
     return stack;
 }
 
-/* get_pointer_stack_fallible: Fetches root["pointer_stack"] as an array, creating if absent. */
-static yyjson_mut_val *get_pointer_stack_fallible(yyjson_mut_doc *doc, const char *ctx) {
-    yyjson_mut_val *root = get_root_fallible(doc, ctx);
-    yyjson_mut_val *pointer_stack = yyjson_mut_obj_get(root, "pointer_stack");
-    if (!pointer_stack) {
-        pointer_stack = yyjson_mut_arr(doc);
-        yyjson_mut_obj_add_val(doc, root, "pointer_stack", pointer_stack);
-    } else if (!yyjson_mut_is_arr(pointer_stack)) {
-        jisp_fatal(doc, "%s: 'pointer_stack' is not an array", ctx ? ctx : "operation");
-    }
-    return pointer_stack;
-}
 
 /* JISP op function signature (no explicit args) */
 typedef void (*jisp_op)(yyjson_mut_doc *doc);
@@ -997,7 +985,6 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
     }
 
     yyjson_mut_val *stack = get_stack_fallible(doc, "process_entrypoint");
-    yyjson_mut_val *pointer_stack = get_pointer_stack_fallible(doc, "process_entrypoint");
 
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
@@ -1016,15 +1003,9 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
             yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
             if (dot) {
                 if (yyjson_mut_is_arr(dot)) {
-                    char current_path[512];
-                    snprintf(current_path, sizeof(current_path), "%s/%zu", path_prefix, idx);
-                    yyjson_mut_arr_add_strcpy(doc, pointer_stack, current_path);
-
                     char nested_path[1024];
-                    snprintf(nested_path, sizeof(nested_path), "%s/.", current_path);
+                    snprintf(nested_path, sizeof(nested_path), "%s/%zu/.", path_prefix, idx);
                     process_ep_array(doc, dot, nested_path);
-
-                    yyjson_mut_arr_remove_last(pointer_stack);
                 } else if (yyjson_mut_is_str(dot)) {
                     const char *name = yyjson_get_str((yyjson_val *)dot);
                     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
@@ -1034,17 +1015,7 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
                         // This is a nested entrypoint call to a root-level array
                         char target_path[512];
                         snprintf(target_path, sizeof(target_path), "/%s", name);
-
-                        // Push current execution path (return address) to pointer_stack
-                        char current_exec_path[512];
-                        snprintf(current_exec_path, sizeof(current_exec_path), "%s/%zu", path_prefix, idx);
-                        yyjson_mut_arr_add_strcpy(doc, pointer_stack, current_exec_path);
-
-                        // Recursively process the target array
                         process_ep_array(doc, target_array, target_path);
-
-                        // Pop return address from pointer_stack
-                        yyjson_mut_arr_remove_last(pointer_stack);
 
                     } else {
                         // Fallback to existing opcode lookup
