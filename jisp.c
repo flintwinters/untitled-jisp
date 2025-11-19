@@ -409,79 +409,7 @@ static void ptr_stack_free_all(void) {
 
 /* Deep copy a yyjson_mut_val within the same document. */
 static yyjson_mut_val *jisp_mut_deep_copy(yyjson_mut_doc *doc, yyjson_mut_val *val) {
-    if (!doc || !val) return NULL;
-
-    yyjson_type t = unsafe_yyjson_get_type(val);
-
-    switch (t) {
-        case YYJSON_TYPE_NULL: {
-            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
-            if (!out) return NULL;
-            unsafe_yyjson_set_tag(out, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
-            return out;
-        }
-        case YYJSON_TYPE_BOOL: {
-            bool b = yyjson_get_bool((yyjson_val *)val);
-            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
-            if (!out) return NULL;
-            unsafe_yyjson_set_bool(out, b);
-            return out;
-        }
-        case YYJSON_TYPE_NUM: {
-            int64_t n = (int64_t)yyjson_mut_get_sint(val);
-            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
-            if (!out) return NULL;
-            unsafe_yyjson_set_sint(out, n);
-            return out;
-        }
-        case YYJSON_TYPE_STR: {
-            const char *s = unsafe_yyjson_get_str(val);
-            size_t len = unsafe_yyjson_get_len(val);
-            char *copy = unsafe_yyjson_mut_strncpy(doc, s ? s : "", s ? len : 0);
-            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
-            if (!out) return NULL;
-            unsafe_yyjson_set_strn(out, copy, s ? len : 0);
-            return out;
-        }
-        case YYJSON_TYPE_ARR: {
-            yyjson_mut_val *out = yyjson_mut_arr(doc);
-            if (!out) return NULL;
-            yyjson_mut_arr_iter it;
-            yyjson_mut_val *e;
-            if (yyjson_mut_arr_iter_init(val, &it)) {
-                while ((e = yyjson_mut_arr_iter_next(&it))) {
-                    yyjson_mut_val *c = jisp_mut_deep_copy(doc, e);
-                    if (!c) return NULL;
-                    yyjson_mut_arr_append(out, c);
-                }
-            }
-            return out;
-        }
-        case YYJSON_TYPE_OBJ: {
-            yyjson_mut_val *out = yyjson_mut_obj(doc);
-            if (!out) return NULL;
-            yyjson_mut_obj_iter it;
-            yyjson_mut_val *k;
-            if (yyjson_mut_obj_iter_init(val, &it)) {
-                while ((k = yyjson_mut_obj_iter_next(&it))) {
-                    yyjson_mut_val *v = yyjson_mut_obj_iter_get_val(k);
-                    const char *ks = unsafe_yyjson_get_str(k);
-                    size_t klen = unsafe_yyjson_get_len(k);
-                    char *kcopy = unsafe_yyjson_mut_strncpy(doc, ks ? ks : "", ks ? klen : 0);
-                    yyjson_mut_val *vcopy = jisp_mut_deep_copy(doc, v);
-                    if (!vcopy) return NULL;
-                    yyjson_mut_obj_add_val(doc, out, kcopy, vcopy);
-                }
-            }
-            return out;
-        }
-        default: {
-            yyjson_mut_val *out = unsafe_yyjson_mut_val(doc, 1);
-            if (!out) return NULL;
-            unsafe_yyjson_set_tag(out, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
-            return out;
-        }
-    }
+    return yyjson_mut_val_mut_copy(doc, val);
 }
 
 /* Residual logging helpers (JSON Patch RFC 6902 minimal recording) */
@@ -800,7 +728,7 @@ void add_two_top(yyjson_mut_doc *doc) {
     double val1 = (double)yyjson_mut_get_sint(val1_mut);
     double val2 = (double)yyjson_mut_get_sint(val2_mut);
     double sum = val1 + val2;
-    yyjson_mut_arr_add_real(doc, stack, sum);
+    yyjson_mut_arr_add_int(doc, stack, sum);
     residual_group_add_patch_with_real(doc, group, "add", "/stack/-", sum);
 
     if (group) residual_group_commit(doc, group);
@@ -1521,12 +1449,26 @@ void op_test(yyjson_mut_doc *doc) {
     
     bool ok = json_subset_equals(expected, result);
     
-    jpm_doc_release(sub_doc);
-    
     if (!ok) {
+        // DEBUG: Print expected and result
+        yyjson_mut_doc *tmp_doc = yyjson_mut_doc_new(NULL);
+        yyjson_mut_val_mut_copy(tmp_doc, expected); // Copy expected to tmp_doc root? No, copy returns val.
+        yyjson_mut_doc_set_root(tmp_doc, yyjson_mut_val_mut_copy(tmp_doc, expected));
+        
+        char *exp_str = yyjson_mut_write(tmp_doc, 0, NULL);
+        char *res_str = yyjson_mut_write(sub_doc, 0, NULL);
+        
+        fprintf(stderr, "DEBUG: test failed.\nExpected: %s\nActual:   %s\n", exp_str ? exp_str : "null", res_str ? res_str : "null");
+        
+        free(exp_str);
+        free(res_str);
+        yyjson_mut_doc_free(tmp_doc);
+
         yyjson_mut_arr_add_strcpy(doc, stack, "ERROR");
         record_patch_add_val(doc, "/stack/-", yyjson_mut_arr_get_last(stack));
     }
+    
+    jpm_doc_release(sub_doc);
 }
 
 /* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
