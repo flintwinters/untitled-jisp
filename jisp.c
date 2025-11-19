@@ -153,11 +153,15 @@ typedef enum jisp_op_id {
     JISP_OP_PTR_GET = 13,
     JISP_OP_PTR_SET = 14,
     JISP_OP_ENTER = 15,
-    JISP_OP_EXIT = 16
+    JISP_OP_EXIT = 16,
+    JISP_OP_TEST = 17
 } jisp_op_id;
 
 void enter(yyjson_mut_doc *doc);
 void op_exit(yyjson_mut_doc *doc);
+void op_test(yyjson_mut_doc *doc);
+
+static void process_entrypoint(yyjson_mut_doc *doc);
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
 
@@ -179,6 +183,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_PTR_SET: return ptr_set;
         case JISP_OP_ENTER: return enter;
         case JISP_OP_EXIT: return op_exit;
+        case JISP_OP_TEST: return op_test;
         default: return NULL;
     }
 }
@@ -204,6 +209,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "ptr_set", JISP_OP_PTR_SET);
     yyjson_mut_obj_add_int(d, root, "enter", JISP_OP_ENTER);
     yyjson_mut_obj_add_int(d, root, "exit", JISP_OP_EXIT);
+    yyjson_mut_obj_add_int(d, root, "test", JISP_OP_TEST);
     g_jisp_op_registry = d;
 }
 
@@ -1444,6 +1450,83 @@ void enter(yyjson_mut_doc *doc) {
 /* exit: signals the current loop to break */
 void op_exit(yyjson_mut_doc *doc) {
     set_exit_interrupt(doc);
+}
+
+static bool json_subset_equals(yyjson_mut_val *subset, yyjson_mut_val *superset) {
+    if (!subset || !superset) return subset == superset;
+    
+    if (unsafe_yyjson_get_type(subset) != unsafe_yyjson_get_type(superset)) {
+        // If types mismatch, check if one is generic number and other is int/real?
+        // yyjson handles num type internally.
+        // unsafe_yyjson_equals handles type check.
+        return false; 
+    }
+    
+    if (yyjson_mut_is_obj(subset)) {
+        if (!yyjson_mut_is_obj(superset)) return false;
+        
+        yyjson_mut_obj_iter it;
+        yyjson_mut_val *key, *val;
+        yyjson_mut_obj_iter_init(subset, &it);
+        while ((key = yyjson_mut_obj_iter_next(&it))) {
+            val = yyjson_mut_obj_iter_get_val(key);
+            const char *kstr = unsafe_yyjson_get_str(key);
+            
+            yyjson_mut_val *super_val = yyjson_mut_obj_get(superset, kstr);
+            if (!super_val) return false;
+            
+            if (!json_subset_equals(val, super_val)) return false;
+        }
+        return true;
+    } else {
+        // Strict equality for other types (Array, Scalar)
+        return yyjson_mut_equals(subset, superset);
+    }
+}
+
+void op_test(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "test");
+    if (yyjson_mut_arr_size(stack) < 2) {
+        jisp_fatal(doc, "test: need [program, expected] on stack");
+    }
+    
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *expected = yyjson_mut_arr_remove_last(stack);
+    
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *program = yyjson_mut_arr_remove_last(stack);
+    
+    if (!expected || !program) {
+        jisp_fatal(doc, "test: null arguments");
+    }
+    
+    // Create isolated sub-document
+    yyjson_mut_doc *sub_doc = yyjson_mut_doc_new(NULL);
+    
+    // Deep copy program to sub_doc root
+    // Note: program is in 'doc'. We need to copy to 'sub_doc'.
+    // jisp_mut_deep_copy takes a doc and a val. It copies val (from whatever doc) INTO 'doc'.
+    // So:
+    yyjson_mut_val *sub_root = jisp_mut_deep_copy(sub_doc, program);
+    yyjson_mut_doc_set_root(sub_doc, sub_root);
+    
+    jpm_doc_retain(sub_doc);
+    
+    // Run it
+    process_entrypoint(sub_doc);
+    
+    // Check result
+    // sub_doc root is the result.
+    yyjson_mut_val *result = yyjson_mut_doc_get_root(sub_doc);
+    
+    bool ok = json_subset_equals(expected, result);
+    
+    jpm_doc_release(sub_doc);
+    
+    if (!ok) {
+        yyjson_mut_arr_add_strcpy(doc, stack, "ERROR");
+        record_patch_add_val(doc, "/stack/-", yyjson_mut_arr_get_last(stack));
+    }
 }
 
 /* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */

@@ -1,34 +1,42 @@
 {
     "stack": [],
     "entrypoint": [
-        "--- Call Stack Test Start ---",
+        "--- Test Op Test Start ---",
         {".": "print_json"},
 
-        // Define a subroutine in root: Push value (Array) then Key (String)
-        [
-            "Inside Subroutine",
-            {".": "print_json"},
-            {".": "exit"},
-            "Should not be printed"
-        ],
-        "subroutine",
-        {".": "pop_and_store"},
+        // Test Case 1: Success
+        // Program
+        {
+            "entrypoint": [10, 20, {".": "add_two_top"}],
+            "stack": []
+        },
+        // Expected Result (Subset)
+        {
+            "stack": [30]
+        },
+        {".": "test"},
         
-        // Call it via path
-        "/subroutine",
-        {".": "enter"},
-
-        "Back in Main",
+        // Check if ERROR is on stack (should not be)
+        "Stack after success test (should be empty of ERROR):",
         {".": "print_json"},
 
-        // Call anonymous array
-        [
-            "Inside Anonymous",
-            {".": "print_json"}
-        ],
-        {".": "enter"},
+        // Test Case 2: Failure
+        // Program
+        {
+            "entrypoint": [10, 20, {".": "add_two_top"}],
+            "stack": []
+        },
+        // Expected Result (Wrong)
+        {
+            "stack": [999]
+        },
+        {".": "test"},
 
-        "--- Call Stack Test End ---",
+         // Check if ERROR is on stack (should be)
+        "Stack after fail test (should have ERROR):",
+        {".": "print_json"},
+
+        "--- Test Op Test End ---",
         {".": "print_json"}
     ]
 }
