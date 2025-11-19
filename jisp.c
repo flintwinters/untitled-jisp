@@ -307,27 +307,6 @@ typedef void (*jisp_op)(yyjson_mut_doc *doc);
 /* Forward declare jpm_ptr for token union pointer kind. */
 typedef struct jpm_ptr jpm_ptr;
 
-/* Token stream types and interpreter */
-typedef enum jisp_tok_kind {
-    JISP_TOK_OP,
-    JISP_TOK_INT,
-    JISP_TOK_REAL,
-    JISP_TOK_STR,
-    JISP_TOK_JPM
-} jisp_tok_kind;
-
-typedef struct jisp_tok {
-    jisp_tok_kind kind;
-    union {
-        jisp_op op;
-        int64_t i;
-        double d;
-        const char *s;
-        const jpm_ptr *ptr;
-    } as;
-} jisp_tok;
-
-static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count);
 static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char *path_prefix);
 
 /* JISP op forward declarations for registry */
@@ -335,7 +314,6 @@ void pop_and_store(yyjson_mut_doc *doc);
 void duplicate_top(yyjson_mut_doc *doc);
 void add_two_top(yyjson_mut_doc *doc);
 void map_over(yyjson_mut_doc *doc);
-void calculate_final_result(yyjson_mut_doc *doc);
 void json_get(yyjson_mut_doc *doc);
 void json_set(yyjson_mut_doc *doc);
 void json_append(yyjson_mut_doc *doc);
@@ -351,7 +329,6 @@ typedef enum jisp_op_id {
     JISP_OP_POP_AND_STORE = 1,
     JISP_OP_DUPLICATE_TOP = 2,
     JISP_OP_ADD_TWO_TOP = 3,
-    JISP_OP_CALCULATE_FINAL_RESULT = 4,
     JISP_OP_PRINT_JSON = 5,
     JISP_OP_UNDO_LAST_RESIDUAL = 6,
     JISP_OP_MAP_OVER = 7,
@@ -364,12 +341,14 @@ typedef enum jisp_op_id {
     JISP_OP_PTR_SET = 14,
     JISP_OP_ENTER = 15,
     JISP_OP_EXIT = 16,
-    JISP_OP_TEST = 17
+    JISP_OP_TEST = 17,
+    JISP_OP_PRINT_ERROR = 18
 } jisp_op_id;
 
 void enter(yyjson_mut_doc *doc);
 void op_exit(yyjson_mut_doc *doc);
 void op_test(yyjson_mut_doc *doc);
+void op_print_error(yyjson_mut_doc *doc);
 
 static void process_entrypoint(yyjson_mut_doc *doc);
 
@@ -380,7 +359,6 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_POP_AND_STORE: return pop_and_store;
         case JISP_OP_DUPLICATE_TOP: return duplicate_top;
         case JISP_OP_ADD_TWO_TOP: return add_two_top;
-        case JISP_OP_CALCULATE_FINAL_RESULT: return calculate_final_result;
         case JISP_OP_PRINT_JSON: return print_json;
         case JISP_OP_UNDO_LAST_RESIDUAL: return undo_last_residual;
         case JISP_OP_MAP_OVER: return map_over;
@@ -394,6 +372,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_ENTER: return enter;
         case JISP_OP_EXIT: return op_exit;
         case JISP_OP_TEST: return op_test;
+        case JISP_OP_PRINT_ERROR: return op_print_error;
         default: return NULL;
     }
 }
@@ -406,7 +385,6 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "pop_and_store", JISP_OP_POP_AND_STORE);
     yyjson_mut_obj_add_int(d, root, "duplicate_top", JISP_OP_DUPLICATE_TOP);
     yyjson_mut_obj_add_int(d, root, "add_two_top", JISP_OP_ADD_TWO_TOP);
-    yyjson_mut_obj_add_int(d, root, "calculate_final_result", JISP_OP_CALCULATE_FINAL_RESULT);
     yyjson_mut_obj_add_int(d, root, "print_json", JISP_OP_PRINT_JSON);
     yyjson_mut_obj_add_int(d, root, "undo_last_residual", JISP_OP_UNDO_LAST_RESIDUAL);
     yyjson_mut_obj_add_int(d, root, "map_over", JISP_OP_MAP_OVER);
@@ -420,6 +398,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "enter", JISP_OP_ENTER);
     yyjson_mut_obj_add_int(d, root, "exit", JISP_OP_EXIT);
     yyjson_mut_obj_add_int(d, root, "test", JISP_OP_TEST);
+    yyjson_mut_obj_add_int(d, root, "print_error", JISP_OP_PRINT_ERROR);
     g_jisp_op_registry = d;
 }
 
@@ -944,6 +923,27 @@ void add_two_top(yyjson_mut_doc *doc) {
     if (group) residual_group_commit(doc, group);
 }
 
+static void map_over_iterate(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson_mut_val *data_array, yyjson_mut_val *func_array, yyjson_mut_val *result_array) {
+    yyjson_mut_arr_iter it;
+    yyjson_mut_val *data_point;
+    yyjson_mut_arr_iter_init(data_array, &it);
+    size_t original_stack_size = yyjson_mut_arr_size(stack);
+
+    while ((data_point = yyjson_mut_arr_iter_next(&it))) {
+        yyjson_mut_val *data_copy = jisp_mut_deep_copy(doc, data_point);
+        yyjson_mut_arr_append(stack, data_copy);
+
+        process_ep_array(doc, func_array, "/map_over/function");
+
+        if (yyjson_mut_arr_size(stack) != original_stack_size + 1) {
+            jisp_fatal(doc, "map_over: function must consume its argument and produce exactly one result on the stack. Stack size mismatch.");
+        }
+
+        yyjson_mut_val *result_element = yyjson_mut_arr_remove_last(stack);
+        yyjson_mut_arr_append(result_array, result_element);
+    }
+}
+
 void map_over(yyjson_mut_doc *doc) {
     yyjson_mut_val *stack = get_stack_fallible(doc, "map_over");
     if (yyjson_mut_arr_size(stack) < 2) {
@@ -977,25 +977,7 @@ void map_over(yyjson_mut_doc *doc) {
         jisp_fatal(doc, "map_over: failed to create result array");
     }
 
-    yyjson_mut_arr_iter it;
-    yyjson_mut_val *data_point;
-    yyjson_mut_arr_iter_init(data_array, &it);
-
-    size_t original_stack_size = yyjson_mut_arr_size(stack);
-
-    while ((data_point = yyjson_mut_arr_iter_next(&it))) {
-        yyjson_mut_val *data_copy = jisp_mut_deep_copy(doc, data_point);
-        yyjson_mut_arr_append(stack, data_copy);
-
-        process_ep_array(doc, function_array, "/map_over/function");
-
-        if (yyjson_mut_arr_size(stack) != original_stack_size + 1) {
-            jisp_fatal(doc, "map_over: function must consume its argument and produce exactly one result on the stack. Stack size mismatch.");
-        }
-
-        yyjson_mut_val *result_element = yyjson_mut_arr_remove_last(stack);
-        yyjson_mut_arr_append(result_array, result_element);
-    }
+    map_over_iterate(doc, stack, data_array, function_array, result_array);
 
     yyjson_mut_arr_append(stack, result_array);
     residual_group_add_patch_with_val(doc, group, "add", "/stack/-", result_array);
@@ -1003,52 +985,31 @@ void map_over(yyjson_mut_doc *doc) {
     if (group) residual_group_commit(doc, group);
 }
 
-// Custom function to replicate Python's `eval_code` for the example
-/* calculate_final_result: Aggregates intermediate fields and optional stack top into final_result; use as a terminal computation step. */
-void calculate_final_result(yyjson_mut_doc *doc) {
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-
-    yyjson_mut_val *temp_sum_val = yyjson_mut_obj_get(root, "temp_sum");
-    yyjson_mut_val *temp_mult_val = yyjson_mut_obj_get(root, "temp_mult");
-
-    double temp_sum = 0;
-    double temp_mult = 0;
-
-    if (temp_sum_val) {
-        if (!yyjson_is_num((yyjson_val *)temp_sum_val)) {
-            jisp_fatal(doc, "calculate_final_result: 'temp_sum' must be numeric");
+static void assign_scalar_to_target(yyjson_mut_doc *doc, yyjson_mut_val *target, yyjson_mut_val *val, const char *ctx) {
+    yyjson_type vt = unsafe_yyjson_get_type(val);
+    switch (vt) {
+        case YYJSON_TYPE_NULL:
+            unsafe_yyjson_set_tag(target, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
+            break;
+        case YYJSON_TYPE_BOOL:
+            unsafe_yyjson_set_bool(target, yyjson_get_bool((yyjson_val*)val));
+            break;
+        case YYJSON_TYPE_NUM:
+            if (yyjson_is_int((yyjson_val*)val))
+                unsafe_yyjson_set_sint(target, yyjson_get_int((yyjson_val*)val));
+            else
+                unsafe_yyjson_set_real(target, yyjson_get_real((yyjson_val*)val));
+            break;
+        case YYJSON_TYPE_STR: {
+            const char *s = unsafe_yyjson_get_str(val);
+            size_t len = unsafe_yyjson_get_len(val);
+            char *copy = unsafe_yyjson_mut_strncpy(doc, s, len);
+            if (!copy) jisp_fatal(doc, "%s: out of memory copying string", ctx);
+            unsafe_yyjson_set_strn(target, copy, len);
+            break;
         }
-        temp_sum = (double)yyjson_mut_get_sint(temp_sum_val);
-    }
-    if (temp_mult_val) {
-        if (!yyjson_is_num((yyjson_val *)temp_mult_val)) {
-            jisp_fatal(doc, "calculate_final_result: 'temp_mult' must be numeric");
-        }
-        temp_mult = (double)yyjson_mut_get_sint(temp_mult_val);
-    }
-
-    yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-    double stack_val = 0;
-    if (stack && yyjson_mut_arr_size(stack) > 0) {
-        jisp_stack_log_remove_last(doc, stack);
-        yyjson_mut_val *val_mut = yyjson_mut_arr_remove_last(stack);
-        if (!val_mut) {
-            jisp_fatal(doc, "calculate_final_result: failed to pop value from stack");
-        }
-        if (!yyjson_is_num((yyjson_val *)val_mut)) {
-            jisp_fatal(doc, "calculate_final_result: top of stack must be numeric");
-        }
-        stack_val = (double)yyjson_mut_get_sint(val_mut);
-    }
-
-    double final_result = temp_sum + temp_mult + stack_val;
-    bool existed_final = yyjson_mut_obj_get(root, "final_result") != NULL;
-    yyjson_mut_obj_add_real(doc, root, "final_result", final_result);
-    
-    if (existed_final) {
-        record_patch_replace_real(doc, "/final_result", final_result);
-    } else {
-        record_patch_add_real(doc, "/final_result", final_result);
+        default:
+            jisp_fatal(doc, "%s: value must be a scalar (null, bool, number, or string)", ctx);
     }
 }
 
@@ -1133,35 +1094,7 @@ void json_set(yyjson_mut_doc *doc) {
     }
 
     /* Only allow scalar assignments for now. */
-    yyjson_type vt = unsafe_yyjson_get_type(value);
-    switch (vt) {
-        case YYJSON_TYPE_NULL: {
-            unsafe_yyjson_set_tag(target, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
-            break;
-        }
-        case YYJSON_TYPE_BOOL: {
-            bool b = yyjson_get_bool((yyjson_val *)value);
-            unsafe_yyjson_set_bool(target, b);
-            break;
-        }
-        case YYJSON_TYPE_NUM: {
-            int64_t n = (int64_t)yyjson_mut_get_sint(value);
-            unsafe_yyjson_set_sint(target, n);
-            break;
-        }
-        case YYJSON_TYPE_STR: {
-            const char *s = unsafe_yyjson_get_str(value);
-            size_t slen = unsafe_yyjson_get_len(value);
-            char *dup = unsafe_yyjson_mut_strncpy(doc, s ? s : "", s ? slen : 0);
-            if (!dup) {
-                jisp_fatal(doc, "set: out of memory duplicating string");
-            }
-            unsafe_yyjson_set_strn(target, dup, s ? slen : 0);
-            break;
-        }
-        default:
-            jisp_fatal(doc, "set: value must be a scalar (null, bool, number, or string)");
-    }
+    assign_scalar_to_target(doc, target, value, "set");
 
     /* Record replace at path with provided value */
     residual_group_add_patch_with_val(doc, group, "replace", path, value);
@@ -1315,47 +1248,7 @@ void ptr_set(yyjson_mut_doc *doc) {
        without potentially corrupting the parent if we aren't careful, but yyjson_mut allows
        modifying the type tag. */
     
-    yyjson_type vt = unsafe_yyjson_get_type(val);
-    
-    /* Basic scalar replacement logic */
-    switch (vt) {
-        case YYJSON_TYPE_NULL:
-            unsafe_yyjson_set_tag(target, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
-            break;
-        case YYJSON_TYPE_BOOL:
-            unsafe_yyjson_set_bool(target, yyjson_get_bool((yyjson_val*)val));
-            break;
-        case YYJSON_TYPE_NUM:
-            /* Assuming integer for simplicity, likely need generic number copy logic if real */
-            if (yyjson_is_int((yyjson_val*)val))
-                unsafe_yyjson_set_sint(target, yyjson_get_int((yyjson_val*)val));
-            else
-                unsafe_yyjson_set_real(target, yyjson_get_real((yyjson_val*)val));
-            break;
-        case YYJSON_TYPE_STR: {
-            const char *s = unsafe_yyjson_get_str(val);
-            size_t len = unsafe_yyjson_get_len(val);
-            char *copy = unsafe_yyjson_mut_strncpy(doc, s, len); /* copy to doc's arena */
-            unsafe_yyjson_set_strn(target, copy, len);
-            break;
-        }
-        /* For containers, deep copy is complex because we need to clone children into doc's arena. 
-           But 'val' is already in 'doc' (since it came from stack). 
-           So we can technically just memcpy the struct? 
-           No, yyjson_mut_val forms a tree. 
-           Ideally, we want to 'become' the other value. */
-        case YYJSON_TYPE_ARR:
-        case YYJSON_TYPE_OBJ: {
-             /* If target and val are both in doc, we can shallow copy the head struct?
-                yyjson_mut_val is opaque but generally small. 
-                However, doing this properly requires internal knowledge or full copy. 
-                For now, let's allow scalar sets only to match json_set behavior safety. */
-             jisp_fatal(doc, "ptr_set: currently supports scalar values only");
-             break;
-        }
-        default:
-            jisp_fatal(doc, "ptr_set: unknown value type");
-    }
+    assign_scalar_to_target(doc, target, val, "ptr_set");
     
     /* TODO: Residual logging for ptr_set (requires path, which is optional in jpm_ptr) */
 }
@@ -1366,6 +1259,26 @@ void print_json(yyjson_mut_doc *doc) {
     if (json_str) {
         printf("%s\n", json_str);
         free(json_str);
+    }
+}
+
+static void undo_op_add(yyjson_mut_doc *doc, yyjson_mut_val *root, const char *path) {
+    if (strcmp(path, "/stack/-") == 0) {
+        yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+        if (stack && yyjson_mut_is_arr(stack) && yyjson_mut_arr_size(stack) > 0) {
+            (void)yyjson_mut_arr_remove_last(stack);
+        }
+    }
+}
+
+static void undo_op_remove(yyjson_mut_doc *doc, yyjson_mut_val *root, const char *path, yyjson_mut_val *valv) {
+    if (!valv) return;
+    if (strncmp(path, "/stack/", 7) == 0) {
+        yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
+        if (stack && yyjson_mut_is_arr(stack)) {
+            yyjson_mut_val *copy = jisp_mut_deep_copy(doc, valv);
+            if (copy) yyjson_mut_arr_append(stack, copy);
+        }
     }
 }
 
@@ -1394,44 +1307,12 @@ static void undo_one_patch(yyjson_mut_doc *doc, yyjson_mut_val *patch) {
     const char *path = yyjson_get_str((yyjson_val *)pathv);
 
     if (strcmp(op, "add") == 0) {
-        /* Best-effort undo: if this was a stack push, pop it; otherwise no-op. */
-        if (strcmp(path, "/stack/-") == 0) {
-            yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-            if (!stack || !yyjson_mut_is_arr(stack) || yyjson_mut_arr_size(stack) == 0) {
-                /* Nothing to undo; best-effort no-op. */
-                return;
-            }
-            (void)yyjson_mut_arr_remove_last(stack);
-        } else {
-            /* Unsupported path for now: best-effort no-op. */
-            return;
-        }
-    } else if (strcmp(op, "replace") == 0) {
-        /* No previous value captured in minimal mode; best-effort no-op. */
-        return;
+        undo_op_add(doc, root, path);
     } else if (strcmp(op, "remove") == 0) {
-        /* If the patch captured the removed value, we can best-effort restore it.
-           Currently support stack removals like "/stack/<idx>" by re-appending the saved value. */
         yyjson_mut_val *valv = yyjson_mut_obj_get(patch, "value");
-        if (!valv) {
-            /* No saved value; best-effort no-op. */
-            return;
-        }
-        if (strncmp(path, "/stack/", 7) == 0) {
-            yyjson_mut_val *stack = yyjson_mut_obj_get(root, "stack");
-            if (!stack || !yyjson_mut_is_arr(stack)) return;
-            yyjson_mut_val *copy = jisp_mut_deep_copy(doc, valv);
-            if (copy) {
-                yyjson_mut_arr_append(stack, copy);
-            }
-            return;
-        }
-        /* Unsupported path kinds: best-effort no-op. */
-        return;
-    } else {
-        /* Unknown op: best-effort no-op. */
-        return;
+        undo_op_remove(doc, root, path, valv);
     }
+    /* replace is currently no-op in minimal mode */
 }
 
 void undo_last_residual(yyjson_mut_doc *doc) {
@@ -1468,36 +1349,6 @@ void undo_last_residual(yyjson_mut_doc *doc) {
     }
 }
 
-
-/* run_tokens: Executes a sequence of tokens against the JSON stack; use to run small programs where ops manipulate root["stack"]. */
-static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) {
-    if (!doc || !toks) return;
-    yyjson_mut_val *stack = get_stack_fallible(doc, "run_tokens");
-
-    for (size_t i = 0; i < count; i++) {
-        jisp_tok t = toks[i];
-        switch (t.kind) {
-            case JISP_TOK_INT:
-                yyjson_mut_arr_add_sint(doc, stack, t.as.i);
-                break;
-            case JISP_TOK_REAL:
-                yyjson_mut_arr_add_real(doc, stack, t.as.d);
-                break;
-            case JISP_TOK_STR:
-                yyjson_mut_arr_add_strcpy(doc, stack, t.as.s ? t.as.s : "");
-                break;
-            case JISP_TOK_JPM:
-                jisp_fatal(doc, "JPM tokens not yet supported in run_tokens");
-                break;
-            case JISP_TOK_OP:
-                if (!t.as.op) jisp_fatal(doc, "NULL op in token stream at index %zu", i);
-                t.as.op(doc);
-                break;
-            default:
-                jisp_fatal(doc, "Unknown token kind at index %zu", i);
-        }
-    }
-}
 
 /* Call Stack Helpers */
 
@@ -1622,6 +1473,68 @@ static bool json_subset_equals(yyjson_mut_val *subset, yyjson_mut_val *superset)
     }
 }
 
+static yyjson_mut_val *jisp_create_error(yyjson_mut_doc *doc, const char *kind, const char *msg) {
+    yyjson_mut_val *err = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_bool(doc, err, "error", true);
+    yyjson_mut_obj_add_strcpy(doc, err, "kind", kind);
+    yyjson_mut_obj_add_strcpy(doc, err, "message", msg);
+    return err;
+}
+
+static void print_jisp_error_pretty(yyjson_mut_val *val) {
+    if (!val || !yyjson_mut_is_obj(val)) {
+        printf("Invalid Error Object\n");
+        return;
+    }
+    
+    yyjson_mut_val *kind = yyjson_mut_obj_get(val, "kind");
+    yyjson_mut_val *msg = yyjson_mut_obj_get(val, "message");
+    yyjson_mut_val *details = yyjson_mut_obj_get(val, "details");
+    
+    const char *kind_str = (kind && yyjson_mut_is_str(kind)) ? yyjson_get_str((yyjson_val*)kind) : "Unknown Error";
+    const char *msg_str = (msg && yyjson_mut_is_str(msg)) ? yyjson_get_str((yyjson_val*)msg) : "";
+    
+    printf("\n-- %s --\n", kind_str);
+    if (msg_str[0]) {
+        printf("%s\n", msg_str);
+    }
+    
+    if (details && yyjson_mut_is_obj(details)) {
+        yyjson_mut_val *expected = yyjson_mut_obj_get(details, "expected");
+        yyjson_mut_val *actual = yyjson_mut_obj_get(details, "actual");
+        
+        if (expected || actual) {
+            if (expected) {
+                printf("Expected:\n");
+                char *json = yyjson_mut_val_write_opts(expected, YYJSON_WRITE_PRETTY | YYJSON_WRITE_INF_AND_NAN_AS_NULL, NULL, NULL, NULL);
+                if (json) { printf("%s\n", json); free(json); }
+            }
+            if (actual) {
+                printf("Actual:\n");
+                char *json = yyjson_mut_val_write_opts(actual, YYJSON_WRITE_PRETTY | YYJSON_WRITE_INF_AND_NAN_AS_NULL, NULL, NULL, NULL);
+                if (json) { printf("%s\n", json); free(json); }
+            }
+        } else {
+             // Fallback for other details
+             printf("Details\n");
+             char *json = yyjson_mut_val_write_opts(details, YYJSON_WRITE_PRETTY | YYJSON_WRITE_INF_AND_NAN_AS_NULL, NULL, NULL, NULL);
+             if (json) { printf("%s\n", json); free(json); }
+        }
+    }
+}
+
+void op_print_error(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "print_error");
+    if (yyjson_mut_arr_size(stack) < 1) {
+        jisp_fatal(doc, "print_error: stack underflow");
+    }
+    
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *val = yyjson_mut_arr_remove_last(stack);
+    
+    print_jisp_error_pretty(val);
+}
+
 void op_test(yyjson_mut_doc *doc) {
     yyjson_mut_val *stack = get_stack_fallible(doc, "test");
     if (yyjson_mut_arr_size(stack) < 2) {
@@ -1660,25 +1573,58 @@ void op_test(yyjson_mut_doc *doc) {
     bool ok = json_subset_equals(expected, result);
     
     if (!ok) {
-        // DEBUG: Print expected and result
-        yyjson_mut_doc *tmp_doc = yyjson_mut_doc_new(NULL);
-        yyjson_mut_val_mut_copy(tmp_doc, expected); // Copy expected to tmp_doc root? No, copy returns val.
-        yyjson_mut_doc_set_root(tmp_doc, yyjson_mut_val_mut_copy(tmp_doc, expected));
+        // Create structured error object
+        yyjson_mut_val *error_obj = jisp_create_error(doc, "test_failure", "Test failed: result mismatch");
+        yyjson_mut_val *details = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_val(doc, error_obj, "details", details);
         
-        char *exp_str = yyjson_mut_write(tmp_doc, 0, NULL);
-        char *res_str = yyjson_mut_write(sub_doc, 0, NULL);
-        
-        fprintf(stderr, "DEBUG: test failed.\nExpected: %s\nActual:   %s\n", exp_str ? exp_str : "null", res_str ? res_str : "null");
-        
-        free(exp_str);
-        free(res_str);
-        yyjson_mut_doc_free(tmp_doc);
+        // Add expected and actual to details
+        yyjson_mut_obj_add_val(doc, details, "expected", jisp_mut_deep_copy(doc, expected));
+        yyjson_mut_obj_add_val(doc, details, "actual", jisp_mut_deep_copy(doc, result));
 
-        yyjson_mut_arr_add_strcpy(doc, stack, "ERROR");
+        yyjson_mut_arr_append(stack, error_obj);
         record_patch_add_val(doc, "/stack/-", yyjson_mut_arr_get_last(stack));
     }
     
     jpm_doc_release(sub_doc);
+}
+
+static void process_ep_object(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson_mut_val *elem, const char *path_prefix, size_t idx) {
+    yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
+    if (!dot) {
+        yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+        return;
+    }
+
+    if (yyjson_mut_is_arr(dot)) {
+        char nested_path[1024];
+        snprintf(nested_path, sizeof(nested_path), "%s/%zu/.", path_prefix, idx);
+        process_ep_array(doc, dot, nested_path);
+        return;
+    } 
+    
+    if (yyjson_mut_is_str(dot)) {
+        const char *name = yyjson_get_str((yyjson_val *)dot);
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+        yyjson_mut_val *target_array = yyjson_mut_obj_get(root, name);
+
+        if (target_array && yyjson_mut_is_arr(target_array)) {
+            char target_path[512];
+            snprintf(target_path, sizeof(target_path), "/%s", name);
+            process_ep_array(doc, target_array, target_path);
+        } else {
+            jisp_op op = jisp_op_registry_get(name);
+            if (op) {
+                op(doc);
+            } else {
+                /* Unknown op name; treat the object as a literal */
+                yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
+            }
+        }
+        return;
+    }
+    
+    jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
 }
 
 /* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
@@ -1706,47 +1652,10 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
             break;
         }
         
-        if (yyjson_mut_is_str(elem)) {
+        if (yyjson_mut_is_obj(elem)) {
+            process_ep_object(doc, stack, elem, path_prefix, idx);
+        } else if (yyjson_mut_is_str(elem) || yyjson_is_num((yyjson_val *)elem) || yyjson_mut_is_arr(elem)) {
             jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else if (yyjson_is_num((yyjson_val *)elem)) {
-            jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else if (yyjson_mut_is_arr(elem)) {
-            jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else if (yyjson_mut_is_obj(elem)) {
-            /* Special-case: object with "." field: array → execute as entrypoint; string → run op if found */
-            yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
-            if (dot) {
-                if (yyjson_mut_is_arr(dot)) {
-                    char nested_path[1024];
-                    snprintf(nested_path, sizeof(nested_path), "%s/%zu/.", path_prefix, idx);
-                    process_ep_array(doc, dot, nested_path);
-                } else if (yyjson_mut_is_str(dot)) {
-                    const char *name = yyjson_get_str((yyjson_val *)dot);
-                    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
-                    yyjson_mut_val *target_array = yyjson_mut_obj_get(root, name);
-
-                    if (target_array && yyjson_mut_is_arr(target_array)) {
-                        // This is a nested entrypoint call to a root-level array
-                        char target_path[512];
-                        snprintf(target_path, sizeof(target_path), "/%s", name);
-                        process_ep_array(doc, target_array, target_path);
-
-                    } else {
-                        // Fallback to existing opcode lookup
-                        jisp_op op = jisp_op_registry_get(name);
-                        if (op) {
-                            op(doc);
-                        } else {
-                            /* Unknown op name; treat the object as a literal */
-                            yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
-                        }
-                    }
-                } else {
-                    jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
-                }
-            } else {
-                yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
-            }
         } else {
             jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
         }
