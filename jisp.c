@@ -129,6 +129,10 @@ void calculate_final_result(yyjson_mut_doc *doc);
 void json_get(yyjson_mut_doc *doc);
 void json_set(yyjson_mut_doc *doc);
 void json_append(yyjson_mut_doc *doc);
+void ptr_new(yyjson_mut_doc *doc);
+void ptr_release_op(yyjson_mut_doc *doc);
+void ptr_get(yyjson_mut_doc *doc);
+void ptr_set(yyjson_mut_doc *doc);
 void print_json(yyjson_mut_doc *doc);
 void undo_last_residual(yyjson_mut_doc *doc);
 
@@ -143,7 +147,11 @@ typedef enum jisp_op_id {
     JISP_OP_MAP_OVER = 7,
     JISP_OP_GET = 8,
     JISP_OP_SET = 9,
-    JISP_OP_APPEND = 10
+    JISP_OP_APPEND = 10,
+    JISP_OP_PTR_NEW = 11,
+    JISP_OP_PTR_RELEASE = 12,
+    JISP_OP_PTR_GET = 13,
+    JISP_OP_PTR_SET = 14
 } jisp_op_id;
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
@@ -160,6 +168,10 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_GET: return json_get;
         case JISP_OP_SET: return json_set;
         case JISP_OP_APPEND: return json_append;
+        case JISP_OP_PTR_NEW: return ptr_new;
+        case JISP_OP_PTR_RELEASE: return ptr_release_op;
+        case JISP_OP_PTR_GET: return ptr_get;
+        case JISP_OP_PTR_SET: return ptr_set;
         default: return NULL;
     }
 }
@@ -179,6 +191,10 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "get", JISP_OP_GET);
     yyjson_mut_obj_add_int(d, root, "set", JISP_OP_SET);
     yyjson_mut_obj_add_int(d, root, "append", JISP_OP_APPEND);
+    yyjson_mut_obj_add_int(d, root, "ptr_new", JISP_OP_PTR_NEW);
+    yyjson_mut_obj_add_int(d, root, "ptr_release", JISP_OP_PTR_RELEASE);
+    yyjson_mut_obj_add_int(d, root, "ptr_get", JISP_OP_PTR_GET);
+    yyjson_mut_obj_add_int(d, root, "ptr_set", JISP_OP_PTR_SET);
     g_jisp_op_registry = d;
 }
 
@@ -338,6 +354,39 @@ static void jpm_ptr_release(jpm_ptr *p) {
     p->doc = NULL;
     p->val = NULL;
     p->path = NULL;
+}
+
+/* Global C-side Pointer Stack */
+#define MAX_PTR_STACK 64
+static jpm_ptr g_ptr_stack[MAX_PTR_STACK];
+static size_t g_ptr_sp = 0;
+
+static void ptr_stack_push(jpm_ptr p) {
+    if (g_ptr_sp >= MAX_PTR_STACK) {
+        jisp_fatal(NULL, "Pointer stack overflow (max %d)", MAX_PTR_STACK);
+    }
+    g_ptr_stack[g_ptr_sp++] = p;
+}
+
+static jpm_ptr ptr_stack_pop(void) {
+    if (g_ptr_sp == 0) {
+        jisp_fatal(NULL, "Pointer stack underflow");
+    }
+    return g_ptr_stack[--g_ptr_sp];
+}
+
+static jpm_ptr ptr_stack_peek(void) {
+    if (g_ptr_sp == 0) {
+        jisp_fatal(NULL, "Pointer stack underflow (peek)");
+    }
+    return g_ptr_stack[g_ptr_sp - 1];
+}
+
+static void ptr_stack_free_all(void) {
+    while (g_ptr_sp > 0) {
+        jpm_ptr p = g_ptr_stack[--g_ptr_sp];
+        jpm_ptr_release(&p);
+    }
 }
 
 /* No monadic combinators: pointers are raw handles with optional path metadata.
@@ -1035,6 +1084,129 @@ void json_append(yyjson_mut_doc *doc) {
     if (group) residual_group_commit(doc, group);
 }
 
+/* ptr_new: Pops a path string from stack, resolves to jpm_ptr, pushes to C pointer stack. */
+void ptr_new(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "ptr_new");
+    if (yyjson_mut_arr_size(stack) < 1) {
+        jisp_fatal(doc, "ptr_new: need [path] on stack");
+    }
+    
+    /* Pop path string */
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
+    if (!yyjson_mut_is_str(path_val)) {
+        jisp_fatal(doc, "ptr_new: path must be a string");
+    }
+    const char *path = yyjson_get_str((yyjson_val *)path_val);
+    
+    jpm_ptr p;
+    jpm_status st = jpm_return(doc, path, &p);
+    if (st != JPM_OK) {
+        jisp_fatal(doc, "ptr_new: resolution failed for path '%s' (status %d)", path, st);
+    }
+    
+    /* Push to C stack */
+    ptr_stack_push(p);
+}
+
+/* ptr_release_op: Pops the top pointer from C pointer stack and releases it. */
+void ptr_release_op(yyjson_mut_doc *doc) {
+    (void)doc;
+    jpm_ptr p = ptr_stack_pop();
+    jpm_ptr_release(&p);
+}
+
+/* ptr_get: Peeks the top pointer, gets its value, deep copies it to stack. */
+void ptr_get(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "ptr_get");
+    jpm_ptr p = ptr_stack_peek();
+    
+    if (!jpm_is_valid(p)) {
+        jisp_fatal(doc, "ptr_get: invalid pointer handle");
+    }
+    
+    yyjson_mut_val *val = jpm_value(p);
+    if (!val) {
+        jisp_fatal(doc, "ptr_get: pointer has null value (stale?)");
+    }
+    
+    yyjson_mut_val *copy = jisp_mut_deep_copy(doc, val);
+    if (!copy) {
+        jisp_fatal(doc, "ptr_get: copy failed");
+    }
+    
+    yyjson_mut_arr_append(stack, copy);
+    record_patch_add_val(doc, "/stack/-", copy);
+}
+
+/* ptr_set: Peeks the top pointer, pops value from stack, overwrites pointer target. */
+void ptr_set(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "ptr_set");
+    if (yyjson_mut_arr_size(stack) < 1) {
+        jisp_fatal(doc, "ptr_set: need [value] on stack");
+    }
+    
+    jpm_ptr p = ptr_stack_peek();
+    if (!jpm_is_valid(p)) {
+        jisp_fatal(doc, "ptr_set: invalid pointer handle");
+    }
+    
+    /* Pop value from stack */
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *val = yyjson_mut_arr_remove_last(stack);
+    
+    yyjson_mut_val *target = jpm_value(p);
+    
+    /* Overwrite target with val's content. Note: this changes the value in-place. */
+    /* We can't easily replace a container with a scalar or vice versa using yyjson_mut_val* 
+       without potentially corrupting the parent if we aren't careful, but yyjson_mut allows
+       modifying the type tag. */
+    
+    yyjson_type vt = unsafe_yyjson_get_type(val);
+    
+    /* Basic scalar replacement logic */
+    switch (vt) {
+        case YYJSON_TYPE_NULL:
+            unsafe_yyjson_set_tag(target, YYJSON_TYPE_NULL, YYJSON_SUBTYPE_NONE, 0);
+            break;
+        case YYJSON_TYPE_BOOL:
+            unsafe_yyjson_set_bool(target, yyjson_get_bool((yyjson_val*)val));
+            break;
+        case YYJSON_TYPE_NUM:
+            /* Assuming integer for simplicity, likely need generic number copy logic if real */
+            if (yyjson_is_int((yyjson_val*)val))
+                unsafe_yyjson_set_sint(target, yyjson_get_int((yyjson_val*)val));
+            else
+                unsafe_yyjson_set_real(target, yyjson_get_real((yyjson_val*)val));
+            break;
+        case YYJSON_TYPE_STR: {
+            const char *s = unsafe_yyjson_get_str(val);
+            size_t len = unsafe_yyjson_get_len(val);
+            char *copy = unsafe_yyjson_mut_strncpy(doc, s, len); /* copy to doc's arena */
+            unsafe_yyjson_set_strn(target, copy, len);
+            break;
+        }
+        /* For containers, deep copy is complex because we need to clone children into doc's arena. 
+           But 'val' is already in 'doc' (since it came from stack). 
+           So we can technically just memcpy the struct? 
+           No, yyjson_mut_val forms a tree. 
+           Ideally, we want to 'become' the other value. */
+        case YYJSON_TYPE_ARR:
+        case YYJSON_TYPE_OBJ: {
+             /* If target and val are both in doc, we can shallow copy the head struct?
+                yyjson_mut_val is opaque but generally small. 
+                However, doing this properly requires internal knowledge or full copy. 
+                For now, let's allow scalar sets only to match json_set behavior safety. */
+             jisp_fatal(doc, "ptr_set: currently supports scalar values only");
+             break;
+        }
+        default:
+            jisp_fatal(doc, "ptr_set: unknown value type");
+    }
+    
+    /* TODO: Residual logging for ptr_set (requires path, which is optional in jpm_ptr) */
+}
+
 /* print_json: Displays the current document contents; use at the end of execution or for user-facing inspection. */
 void print_json(yyjson_mut_doc *doc) {
     char *json_str = jisp_json_to_pretty_string(doc);
@@ -1295,13 +1467,15 @@ int main(int argc, char **argv) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_val_mut_copy(doc, in_root);
     yyjson_mut_doc_set_root(doc, root);
+    jpm_doc_retain(doc);
 
     yyjson_doc_free(in);
 
     process_entrypoint(doc);
     print_json(doc);
-    yyjson_mut_doc_free(doc);
+    jpm_doc_release(doc);
     free(buf);
+    ptr_stack_free_all();
     jisp_op_registry_free();
     return 0;
 }

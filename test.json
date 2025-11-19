@@ -1,20 +1,36 @@
 {
-    "stack": [],
-    "temp_sum": 0,
-    "temp_mult": 0,
+    "temp_sum": 10,
+    "temp_mult": 2,
     "final_result": 0,
+    "residual": [],
+    "is_reversible": true,
+    "stack": [],
     "entrypoint": [
-        50, 56,
-        "add_two_top",
-        "print_json"
-    ],
-    "user": {
-        "profile": {
-            "age": 42,
-            "x/y": 1,
-            "x~y": 2
-        }
-    },
-    // this is a comment
-    "nums": [7, 8, 9]
+        "--- JPM Test Start ---",
+        {".": "print_json"},
+
+        // 1. Create pointer to /temp_sum (value 10)
+        "/temp_sum",
+        {".": "ptr_new"},
+
+        // 2. Read via pointer (should push 10)
+        {".": "ptr_get"},
+
+        // 3. Write via pointer (set to 42)
+        42,
+        {".": "ptr_set"},
+
+        // 4. Read via pointer again (should push 42)
+        {".": "ptr_get"},
+
+        // 5. Release the pointer
+        {".": "ptr_release"},
+
+        // 6. Verify mutation using standard path get (should push 42)
+        "/temp_sum",
+        {".": "get"},
+
+        "--- JPM Test End ---",
+        {".": "print_json"}
+    ]
 }

@@ -1,27 +1,43 @@
-# JISP: JSON Stack Machine Interpreter
+# JISP: JSON Instruction Stream Processor
 
-JISP (JSON Stack-based Interpreter) is a C-language interpreter that processes JSON-defined programs. It leverages the `yyjson` library for efficient JSON manipulation and features a stack-based execution model.
+JISP is a compact, embeddable stack machine runtime written in C. It treats a JSON document as both its memory and its instruction stream.
 
-## Features
+## Quick Start
 
-*   **JSON-driven Logic:** Programs are defined as JSON structures, enabling flexible and data-centric control flow.
-*   **Stack Machine:** Operates on a `stack` array within the JSON document for data manipulation.
-*   **Reversibility (Undo):** Records changes as JSON Patch operations (`residual` array) for best-effort undo functionality.
-*   **JSON Pointer Monad:** Basic support for JSON Pointer (RFC 6901) resolution.
-*   **Extensible Opcodes:** Supports custom operations (e.g., `add_two_top`, `pop_and_store`).
-*   **Entrypoint Execution:** Processes a main `entrypoint` array, supporting nested calls and execution context tracking.
-*   **Error Handling:** Includes robust error reporting with state snapshots and source position.
-
-## Usage
-
-To run a JISP program, compile `jisp.c` and provide a JSON file as an argument:
-
+### 1. Build
 ```bash
-./jisp <your_program>.json
+gcc -o jisp jisp.c yyjson.c -O3
 ```
 
-The interpreter will load the JSON, execute the `entrypoint` array, and print the final JSON state to standard output.
+### 2. Run
+Create a file `test.json`:
+```json
+{
+  "stack": [],
+  "entrypoint": [
+    "Hello World",
+    "message",
+    { ".": "pop_and_store" },
+    { ".": "print_json" }
+  ]
+}
+```
 
-## Dependencies
+Run it:
+```bash
+./jisp test.json
+```
 
-*   `yyjson`: A high-performance JSON library for C.
+## Documentation
+
+Full technical documentation is available in [docs/JISP_MANUAL.md](docs/JISP_MANUAL.md).
+
+- **Architecture:** How JISP uses JSON as memory.
+- **Opcodes:** Complete instruction set reference.
+- **Reversibility:** How to use the undo system.
+
+## Key Features
+
+*   **Zero-Parse Overhead:** Instructions are just JSON arrays; no separate bytecode parsing step (beyond standard JSON parsing).
+*   **Introspection:** The entire machine state (stack, registers, heap) is inspectable at any time by printing the document.
+*   **Residual Tracking:** Built-in support for recording mutations via JSON Patch for undo/redo functionality.
