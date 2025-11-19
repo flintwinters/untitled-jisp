@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,7 +6,28 @@
 #include <stdbool.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <execinfo.h>
+#include <bfd.h>
+#include <dlfcn.h>
+#include <ctype.h>
 #include "yyjson.h"
+
+// --- Color Definitions ---
+#define C_ANY(r, g, b)   "\033[38;2;" #r ";" #g ";" #b "m"
+#define C_RESET          "\033[0m"
+#define C_RED            "\033[0;31m"
+#define C_GREEN          "\033[0;32m"
+#define C_BRIGHT_GREEN   "\033[1;32m"
+#define C_DARK_GREEN     "\033[2;32m"
+#define C_ORANGE         C_ANY(255, 140, 0)
+#define C_DARK_ORANGE    C_ANY(200, 100, 0)
+#define C_YELLOW         "\033[0;33m"
+#define C_BRIGHT_BLUE    "\033[1;34m"
+#define C_BLUE           "\033[0;34m"
+#define C_CYAN           "\033[0;36m"
+#define C_DARK_CYAN      "\033[2;36m"
+#define C_MAGENTA        "\033[0;35m"
+#define C_GRAY           "\033[0;90m"
 
 /* Error handling context and helpers */
 typedef struct jisp_ctx {
@@ -15,6 +37,178 @@ typedef struct jisp_ctx {
 } jisp_ctx;
 
 static jisp_ctx g_jisp_ctx = {0};
+
+// --- BFD Data Structure for Caching ---
+typedef struct BfdData {
+    char* path;
+    bfd* abfd;
+    asymbol** syms;
+    struct BfdData* next;
+} BfdData;
+
+static BfdData* bfd_cache_head = NULL;
+
+// --- BFD Cleanup ---
+static void cleanup_bfd_cache(void) {
+    BfdData* current = bfd_cache_head;
+    while (current) {
+        BfdData* next = current->next;
+        if (current->syms) {
+            free(current->syms);
+        }
+        if (current->abfd) {
+            bfd_close(current->abfd);
+        }
+        free(current->path);
+        free(current);
+        current = next;
+    }
+    bfd_cache_head = NULL;
+}
+
+// --- Helper function to open BFD and read symbols for a given file ---
+static BfdData* get_bfd_data_for_file(const char* path) {
+    // Search in cache first
+    for (BfdData* iter = bfd_cache_head; iter != NULL; iter = iter->next) {
+        if (strcmp(iter->path, path) == 0) {
+            return iter;
+        }
+    }
+
+    // Not in cache, create a new entry
+    BfdData* new_data = (BfdData*)calloc(1, sizeof(BfdData));
+    if (!new_data) return NULL;
+    new_data->path = strdup(path);
+    if (!new_data->path) {
+        free(new_data);
+        return NULL;
+    }
+
+    // Initialize BFD
+    bfd* abfd = bfd_openr(path, NULL);
+    if (!abfd) {
+        // Store failure and return
+        new_data->next = bfd_cache_head;
+        bfd_cache_head = new_data;
+        return new_data;
+    }
+
+    if (!bfd_check_format(abfd, bfd_object)) {
+        bfd_close(abfd);
+        new_data->next = bfd_cache_head;
+        bfd_cache_head = new_data;
+        return new_data;
+    }
+
+    long storage_needed = bfd_get_symtab_upper_bound(abfd);
+    if (storage_needed <= 0) {
+        bfd_close(abfd);
+        new_data->next = bfd_cache_head;
+        bfd_cache_head = new_data;
+        return new_data;
+    }
+
+    asymbol** syms = (asymbol**)malloc(storage_needed);
+    if (!syms) {
+        bfd_close(abfd);
+        new_data->next = bfd_cache_head;
+        bfd_cache_head = new_data;
+        return new_data;
+    }
+
+    long symcount = bfd_canonicalize_symtab(abfd, syms);
+    if (symcount < 0) {
+        free(syms);
+        bfd_close(abfd);
+        new_data->next = bfd_cache_head;
+        bfd_cache_head = new_data;
+        return new_data;
+    }
+
+    // Success
+    new_data->abfd = abfd;
+    new_data->syms = syms;
+
+    // Add to cache
+    new_data->next = bfd_cache_head;
+    bfd_cache_head = new_data;
+
+    return new_data;
+}
+
+static void print_c_stacktrace(const char* msg) {
+    printf("\033[1;31m -- %s --\n", msg ? msg : "STACK TRACE");
+    // bfd_init() must be called once
+    static int bfd_initialized = 0;
+    if (!bfd_initialized) {
+        bfd_init();
+        atexit(cleanup_bfd_cache);
+        bfd_initialized = 1;
+    }
+
+    void *array[100];
+    int size;
+    
+    // Get the raw stack addresses
+    size = backtrace(array, 100);
+
+    // Iterate over addresses and resolve them
+    for (int i = 0; i < size; i++) {
+        bfd_vma addr = (bfd_vma)array[i];
+        Dl_info info; 
+
+        // Step A: Use dladdr() for basic symbol/file info (works for ALL libraries)
+        if (!dladdr((void*)addr, &info) || !info.dli_fname) {
+             printf(C_YELLOW "0x%lx" C_RESET " " C_RED "(dladdr failed)" C_RESET "\n", (long)addr);
+             continue;
+        }
+
+        const char *filename = info.dli_fname;
+        const char *functionname = info.dli_sname ? info.dli_sname : "??";
+        unsigned int line = 0;
+        
+        // Step B: Use BFD to find line number information for any library/executable
+        BfdData* bfd_data = get_bfd_data_for_file(info.dli_fname);
+        if (bfd_data && bfd_data->abfd && bfd_data->syms) {
+            bfd_vma adj_addr = addr - (bfd_vma)info.dli_fbase;
+            asection *sec;
+            bfd_boolean found = 0;
+            
+            for (sec = bfd_data->abfd->sections; sec != NULL; sec = sec->next) {
+                if ((bfd_section_flags(sec) & SEC_ALLOC) == 0) {
+                    continue;
+                }
+
+                bfd_vma sec_vma = bfd_section_vma(sec);
+                bfd_size_type sec_size = bfd_section_size(sec);
+
+                if (adj_addr >= sec_vma && adj_addr < sec_vma + sec_size) {
+                    found = bfd_find_nearest_line(bfd_data->abfd, sec, bfd_data->syms, adj_addr - sec_vma,
+                                                  &filename, &functionname, &line);
+                    if (found) break;
+                }
+            }
+            
+            if (found && line > 0) {
+                // Success: format the output like addr2line
+                 printf(C_YELLOW "0x%lx\033[10G" C_GREEN "%s" C_RESET ":" C_MAGENTA "%u " C_DARK_CYAN "%s" C_RESET "\n", 
+                        (long)(addr & 0xffffff),
+                        functionname ? functionname : "??", 
+                        line,
+                        (strrchr(filename, '/') ? strrchr(filename, '/') + 1 : filename));
+                continue;
+            }
+        }
+        
+        // Fallback if BFD didn't give line info but dladdr did
+        printf(C_YELLOW "0x%lx\033[10G" C_GREEN "%s" C_RESET " " C_DARK_CYAN "%s" C_RESET "\n", 
+            (long)(addr & 0xffffff),
+            functionname ? functionname : "??",
+            (strrchr(filename, '/') ? strrchr(filename, '/') + 1 : filename));
+
+    }
+    printf("\033[1;31m -- END TRACE --\n" C_RESET);
+}
 
 /* jisp_json_to_pretty_string: Produces a pretty-printed JSON string for diagnostics or user output; use wherever the doc needs to be serialized for display. */
 static char *jisp_json_to_pretty_string(yyjson_mut_doc *doc) {
@@ -55,6 +249,14 @@ static void jisp_fatal(yyjson_mut_doc *doc, const char *fmt, ...) {
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
+    
+    // Capture formatted message for stack trace
+    char buf[1024];
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    print_c_stacktrace(buf);
+
     jisp_dump_state(doc);
     exit(1);
 }
@@ -67,6 +269,14 @@ static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const
     vfprintf(stderr, fmt, ap);
     fprintf(stderr, "\n");
     va_end(ap);
+    
+    // Capture formatted message for stack trace
+    char buf[1024];
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    print_c_stacktrace(buf);
+
     jisp_report_pos(source_name, src, len, pos);
     jisp_dump_state(doc);
     exit(1);

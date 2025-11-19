@@ -22,7 +22,7 @@ CFLAGS = [
     "-g",
     "-O0"
 ]
-LDFLAGS = []
+LDFLAGS = ["-lbfd", "-ldl"]
 
 # Source files and target executable
 SRCS = ["jisp.c", "yyjson.c"]
