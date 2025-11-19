@@ -94,6 +94,12 @@ JISP maintains a runtime call stack in `root["call_stack"]`.
 | :--- | :--- | :--- |
 | `test` | `[..., Prog, Expect]` -> `[..., "ERROR"?]` | Executes `Prog` (full JISP program doc) in a sandbox. Compares result against `Expect` (subset match). If mismatch, pushes "ERROR". |
 
+### 3.9. I/O Operations
+| Opcode | Stack (Before) -> (After) | Description |
+| :--- | :--- | :--- |
+| `load` | `[..., Path]` -> `[..., JSONVal]` | Reads JSON file at `Path` and pushes its root value. Fatals on error. |
+| `store` | `[..., Val, Path]` -> `[...]` | Writes `Val` to a JSON file at `Path`. Fatals on error. |
+
 ## 4. Macro / Subroutine System
 If an instruction is `{ ".": "name" }`:
 1.  **Opcode Check:** Checks if "name" is a registered C opcode. If yes, executes it.
