@@ -111,6 +111,29 @@ JISP supports "Time Travel Debugging" (Undo) via JSON Patch (RFC 6902).
     - **Replace:** Recorded as `{"op": "replace", ...}`.
 - **Grouping:** Atomic operations (like `map_over`) group their patches so a single `undo_last_residual` reverts the entire logical step.
 
+## 6. Example Program
+
+```json
+{
+  "stack": [],
+  "entrypoint": [
+    "/stack/0",
+    { ".": "ptr_new" },
+    100,
+    { ".": "ptr_set" },
+    { ".": "ptr_release" },
+    { ".": "print_json" }
+  ]
+}
+```
+**Execution:**
+1. Push path string `"/stack/0"`.
+2. `ptr_new`: Pops path, pushes pointer to `stack[0]` to C-stack.
+3. Push `100`.
+4. `ptr_set`: Pops `100`, overwrites value at pointer (stack[0]) with 100.
+5. `ptr_release`: Clean up pointer.
+6. `print_json`: Show result.
+
 ## 7. Error Handling & Diagnostics
 JISP provides robust error reporting for both parsing and runtime failures.
 
