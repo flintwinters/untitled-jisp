@@ -1,36 +1,34 @@
 {
-    "temp_sum": 10,
-    "temp_mult": 2,
-    "final_result": 0,
-    "residual": [],
-    "is_reversible": true,
     "stack": [],
     "entrypoint": [
-        "--- JPM Test Start ---",
+        "--- Call Stack Test Start ---",
         {".": "print_json"},
 
-        // 1. Create pointer to /temp_sum (value 10)
-        "/temp_sum",
-        {".": "ptr_new"},
+        // Define a subroutine in root: Push value (Array) then Key (String)
+        [
+            "Inside Subroutine",
+            {".": "print_json"},
+            {".": "exit"},
+            "Should not be printed"
+        ],
+        "subroutine",
+        {".": "pop_and_store"},
+        
+        // Call it via path
+        "/subroutine",
+        {".": "enter"},
 
-        // 2. Read via pointer (should push 10)
-        {".": "ptr_get"},
+        "Back in Main",
+        {".": "print_json"},
 
-        // 3. Write via pointer (set to 42)
-        42,
-        {".": "ptr_set"},
+        // Call anonymous array
+        [
+            "Inside Anonymous",
+            {".": "print_json"}
+        ],
+        {".": "enter"},
 
-        // 4. Read via pointer again (should push 42)
-        {".": "ptr_get"},
-
-        // 5. Release the pointer
-        {".": "ptr_release"},
-
-        // 6. Verify mutation using standard path get (should push 42)
-        "/temp_sum",
-        {".": "get"},
-
-        "--- JPM Test End ---",
+        "--- Call Stack Test End ---",
         {".": "print_json"}
     ]
 }

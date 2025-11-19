@@ -151,8 +151,13 @@ typedef enum jisp_op_id {
     JISP_OP_PTR_NEW = 11,
     JISP_OP_PTR_RELEASE = 12,
     JISP_OP_PTR_GET = 13,
-    JISP_OP_PTR_SET = 14
+    JISP_OP_PTR_SET = 14,
+    JISP_OP_ENTER = 15,
+    JISP_OP_EXIT = 16
 } jisp_op_id;
+
+void enter(yyjson_mut_doc *doc);
+void op_exit(yyjson_mut_doc *doc);
 
 static yyjson_mut_doc *g_jisp_op_registry = NULL;
 
@@ -172,6 +177,8 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_PTR_RELEASE: return ptr_release_op;
         case JISP_OP_PTR_GET: return ptr_get;
         case JISP_OP_PTR_SET: return ptr_set;
+        case JISP_OP_ENTER: return enter;
+        case JISP_OP_EXIT: return op_exit;
         default: return NULL;
     }
 }
@@ -195,6 +202,8 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "ptr_release", JISP_OP_PTR_RELEASE);
     yyjson_mut_obj_add_int(d, root, "ptr_get", JISP_OP_PTR_GET);
     yyjson_mut_obj_add_int(d, root, "ptr_set", JISP_OP_PTR_SET);
+    yyjson_mut_obj_add_int(d, root, "enter", JISP_OP_ENTER);
+    yyjson_mut_obj_add_int(d, root, "exit", JISP_OP_EXIT);
     g_jisp_op_registry = d;
 }
 
@@ -1346,6 +1355,97 @@ static void run_tokens(yyjson_mut_doc *doc, const jisp_tok *toks, size_t count) 
     }
 }
 
+/* Call Stack Helpers */
+
+/* Ensure root["call_stack"] exists and is an array. */
+static yyjson_mut_val *ensure_call_stack(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = ensure_root_object(doc);
+    yyjson_mut_val *cs = yyjson_mut_obj_get(root, "call_stack");
+    if (cs && yyjson_mut_is_arr(cs)) return cs;
+    
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    yyjson_mut_obj_add_val(doc, root, "call_stack", arr);
+    return arr;
+}
+
+static void push_call_stack(yyjson_mut_doc *doc, const char *path) {
+    yyjson_mut_val *cs = ensure_call_stack(doc);
+    yyjson_mut_arr_add_strcpy(doc, cs, path ? path : "<unknown>");
+}
+
+static void pop_call_stack(yyjson_mut_doc *doc) {
+    yyjson_mut_val *cs = ensure_call_stack(doc);
+    // Best effort remove last
+    size_t sz = yyjson_mut_arr_size(cs);
+    if (sz > 0) {
+        // We don't have a direct remove_last in public API? 
+        // We can iterate and remove? Or just assume we don't need to?
+        // Wait, jisp.c uses `yyjson_mut_arr_remove_last` in other places.
+        // So it is available.
+        (void)yyjson_mut_arr_remove_last(cs);
+    }
+}
+
+/* Interrupt handling for exit */
+static void set_exit_interrupt(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = ensure_root_object(doc);
+    yyjson_mut_obj_add_bool(doc, root, "_interrupt_exit", true);
+}
+
+static bool check_and_clear_exit_interrupt(yyjson_mut_doc *doc) {
+    yyjson_mut_val *root = ensure_root_object(doc);
+    yyjson_mut_val *flag = yyjson_mut_obj_get(root, "_interrupt_exit");
+    if (flag && yyjson_get_bool((yyjson_val*)flag)) {
+        // Clear it so we only exit one level
+        yyjson_mut_obj_remove_key(root, "_interrupt_exit"); 
+        return true;
+    }
+    return false;
+}
+
+/* enter: Pops target from stack. If string path, executes array at path. If array, executes it in-place. */
+void enter(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = get_stack_fallible(doc, "enter");
+    if (yyjson_mut_arr_size(stack) < 1) {
+        jisp_fatal(doc, "enter: stack underflow");
+    }
+    
+    // Peek top to see what it is
+    yyjson_mut_val *top = yyjson_mut_arr_remove_last(stack); // Pop it!
+    // Note: If we pop an array, it is detached. 
+    // If we execute it, we need to be careful about its lifecycle if doc is freed? 
+    // The doc is retained. The array is in the doc's pool. It's fine.
+    
+    if (yyjson_mut_is_str(top)) {
+        const char *path = yyjson_get_str((yyjson_val*)top);
+        // Resolve path
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+        yyjson_mut_val *target = NULL;
+        if (strcmp(path, "/") == 0) target = root;
+        else target = yyjson_mut_ptr_get(root, path);
+        
+        if (!target || !yyjson_mut_is_arr(target)) {
+            jisp_fatal(doc, "enter: path '%s' does not resolve to an array", path);
+        }
+        
+        // Execute
+        process_ep_array(doc, target, path);
+        
+    } else if (yyjson_mut_is_arr(top)) {
+        // Anonymous array execution
+        // We popped it.
+        process_ep_array(doc, top, "<anonymous>");
+        
+    } else {
+        jisp_fatal(doc, "enter: top of stack must be a path string or an array");
+    }
+}
+
+/* exit: signals the current loop to break */
+void op_exit(yyjson_mut_doc *doc) {
+    set_exit_interrupt(doc);
+}
+
 /* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
 static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char *path_prefix) {
     if (!doc || !ep) return;
@@ -1353,14 +1453,24 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
         jisp_fatal(doc, "entrypoint must be an array");
     }
 
+    push_call_stack(doc, path_prefix);
+    
     yyjson_mut_val *stack = get_stack_fallible(doc, "process_entrypoint");
 
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
-    if (!yyjson_mut_arr_iter_init(ep, &it)) return;
+    if (!yyjson_mut_arr_iter_init(ep, &it)) {
+        pop_call_stack(doc);
+        return;
+    }
 
     size_t idx = 0;
     while ((elem = yyjson_mut_arr_iter_next(&it))) {
+        
+        if (check_and_clear_exit_interrupt(doc)) {
+            break;
+        }
+        
         if (yyjson_mut_is_str(elem)) {
             jisp_stack_push_copy_and_log(doc, stack, elem);
         } else if (yyjson_is_num((yyjson_val *)elem)) {
@@ -1407,6 +1517,8 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
         }
         idx++;
     }
+    
+    pop_call_stack(doc);
 }
 
 /* process_entrypoint: Top-level driver for entrypoint arrays; use to seed the stack from initial program data and nested directives. */
