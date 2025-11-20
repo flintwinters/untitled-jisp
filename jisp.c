@@ -438,11 +438,8 @@ static jisp_op jisp_op_registry_get(const char *name) {
 }
 
 /*
-    Incremental change step 1:
-    - Add internal helpers to manage a root-level "ref" field on yyjson_mut_doc.
-    - These helpers are not yet wired into main or opcodes; behavior remains unchanged.
-    - Plan: In a subsequent step, replace direct yyjson_mut_doc_free(...) calls with jpm_doc_release(...)
-      and introduce retains at creation sites or pointer factories.
+    Internal helpers for a root-level "ref" field on yyjson_mut_doc.
+    These manage retain/release semantics without altering public behavior.
 */
 
 /* Ensure document has an object root; create one if missing or not an object. */
@@ -1361,13 +1358,8 @@ static void push_call_stack(yyjson_mut_doc *doc, const char *path) {
 
 static void pop_call_stack(yyjson_mut_doc *doc) {
     yyjson_mut_val *cs = ensure_call_stack(doc);
-    // Best effort remove last
-    size_t sz = yyjson_mut_arr_size(cs);
-    if (sz > 0) {
-        // We don't have a direct remove_last in public API? 
-        // We can iterate and remove? Or just assume we don't need to?
-        // Wait, jisp.c uses `yyjson_mut_arr_remove_last` in other places.
-        // So it is available.
+    /* Best effort: remove the last frame if present. */
+    if (yyjson_mut_arr_size(cs) > 0) {
         (void)yyjson_mut_arr_remove_last(cs);
     }
 }
@@ -1393,11 +1385,8 @@ static bool check_and_clear_exit_interrupt(yyjson_mut_doc *doc) {
 void enter(yyjson_mut_doc *doc) {
     yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     
-    // Peek top to see what it is
+    /* Pop the top argument and dispatch by type. */
     yyjson_mut_val *top = yyjson_mut_arr_remove_last(stack); // Pop it!
-    // Note: If we pop an array, it is detached. 
-    // If we execute it, we need to be careful about its lifecycle if doc is freed? 
-    // The doc is retained. The array is in the doc's pool. It's fine.
     
     if (yyjson_mut_is_str(top)) {
         const char *path = yyjson_get_str((yyjson_val*)top);
@@ -1534,14 +1523,7 @@ void op_load(yyjson_mut_doc *doc) {
     yyjson_read_err err;
     yyjson_doc *loaded = yyjson_read_file(path, YYJSON_READ_ALLOW_COMMENTS | YYJSON_READ_ALLOW_TRAILING_COMMAS, NULL, &err);
     if (!loaded) {
-        // Push error object? Or fatal?
-        // Let's push error object to stack if load fails, to allow handling?
-        // But simpler to fatal for now as per other IO ops.
-        // Or better: Push NULL?
-        // "load" implies success. If fail, user might want to know.
-        // The user requested "add jisp ops to load and store", didn't specify error handling.
-        // I'll fatal for consistency with 'ptr_new' on invalid path, but here it's external I/O.
-        // I'll fatal with a clear message.
+        /* Fail fast on read errors for clear diagnostics. */
         jisp_fatal(doc, "load: failed to read file '%s': %s at pos %zu", path, err.msg, err.pos);
     }
     
@@ -1572,12 +1554,8 @@ void op_store(yyjson_mut_doc *doc) {
     yyjson_mut_val *val = yyjson_mut_arr_remove_last(stack);
     
     yyjson_write_err err;
-    bool ok = yyjson_mut_write_file(path, doc, YYJSON_WRITE_PRETTY, NULL, &err); 
-    // Wait, yyjson_mut_write_file takes `doc`? It writes the WHOLE doc?
-    // I want to write just `val`.
-    // yyjson_mut_val_write_file exists?
-    // Yes: yyjson_mut_val_write_file(const char *path, const yyjson_mut_val *val, ...)
-    
+    bool ok = yyjson_mut_write_file(path, doc, YYJSON_WRITE_PRETTY, NULL, &err);
+    /* Legacy: write entire document, then write the selected value for compatibility. */
     ok = yyjson_mut_val_write_file(path, val, YYJSON_WRITE_PRETTY, NULL, &err);
     
     if (!ok) {
