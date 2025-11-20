@@ -38,6 +38,9 @@ typedef struct jisp_ctx {
 
 static jisp_ctx g_jisp_ctx = {0};
 
+static bool g_opt_raw = false;
+static bool g_opt_compact = false;
+
 // --- BFD Data Structure for Caching ---
 typedef struct BfdData {
     char* path;
@@ -1243,7 +1246,21 @@ void ptr_set(yyjson_mut_doc *doc) {
 
 /* print_json: Displays the current document contents; use at the end of execution or for user-facing inspection. */
 void print_json(yyjson_mut_doc *doc) {
-    char *json_str = jisp_json_to_pretty_string(doc);
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
+    if (!root) return;
+
+    if (g_opt_raw && yyjson_mut_is_str(root)) {
+        printf("%s\n", yyjson_get_str((yyjson_val *)root));
+        return;
+    }
+
+    yyjson_write_flag flg = YYJSON_WRITE_NOFLAG;
+    if (!g_opt_compact) {
+        flg |= YYJSON_WRITE_PRETTY;
+    }
+
+    yyjson_write_err err;
+    char *json_str = yyjson_mut_write_opts(doc, flg, NULL, NULL, &err);
     if (json_str) {
         printf("%s\n", json_str);
         free(json_str);
@@ -1866,10 +1883,38 @@ int main(int argc, char **argv) {
     /* Initialize global JISP op registry (JSON doc) */
     jisp_op_registry_init();
 
-    if (argc < 2) {
+    int arg_idx = 1;
+    const char *filename = NULL;
+
+    while (arg_idx < argc) {
+        const char *arg = argv[arg_idx];
+        if (arg[0] == '-' && arg[1] != '\0') {
+             // It's a flag or stdin "-"
+             if (strcmp(arg, "-") == 0) {
+                 filename = "-"; // explicit stdin
+             } else {
+                 // Parse flags like -rc, -c, -r
+                 for (int j = 1; arg[j]; j++) {
+                     if (arg[j] == 'r') g_opt_raw = true;
+                     else if (arg[j] == 'c') g_opt_compact = true;
+                     else {
+                         fprintf(stderr, "Unknown option: -%c\n", arg[j]);
+                         return 1;
+                     }
+                 }
+             }
+        } else {
+            filename = arg;
+        }
+        arg_idx++;
+    }
+
+    if (!filename) {
+        jisp_process_stream(stdin, "stdin");
+    } else if (strcmp(filename, "-") == 0) {
         jisp_process_stream(stdin, "stdin");
     } else {
-        jisp_process_whole_file(argv[1]);
+        jisp_process_whole_file(filename);
     }
     
     ptr_stack_free_all();
