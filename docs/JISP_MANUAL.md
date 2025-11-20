@@ -25,7 +25,10 @@ The interpreter iterates through this array, treating elements as instructions:
     - `{ ".": "op_name" }`: Invokes the opcode or macro named "op_name".
     - `{ ".": [...] }`: Executes the nested array as a subroutine.
 
-### 2.3. Design Philosophy
+### 2.3. Execution Structure
+The execution structure of a JISP program is inherently hierarchical, mirroring the JSON document structure. While the main execution loop processes a linear array of instructions (the "Stream"), control flow operations like `enter` or macro invocations can push new arrays onto the execution context. This creates a natural mapping between JSON nesting and the runtime call stack. Unlike traditional flat assembly languages that rely on `JMP` instructions and labels for control flow, JISP leverages structural nesting (arrays within arrays) to define scopes and subroutines. This design ensures that the program structure is visual, self-contained, and directly manipulable as data.
+
+### 2.4. Design Philosophy
 - **Unified State:** Code, data, stack, and registers reside in one serializable JSON object. This allows `print_json` to produce a complete, restorable snapshot of the machine state at any point, facilitating "Time Travel Debugging".
 - **Safety & Diagnostics:** JISP prioritizes fail-fast behavior. Invalid paths or types trigger fatal errors with C-level stack traces (via `libbfd`) and JSON state dumps, rather than undefined behavior.
 - **Hidden Pointer Stack (JPM):** To efficiently manipulate mutable values without constant path resolution, JISP employs a hidden C-side pointer stack (`ptr_new`, `ptr_get`, `ptr_set`). This "pins" values for efficient modification.
