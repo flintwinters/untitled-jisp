@@ -300,6 +300,16 @@ static yyjson_mut_val *get_stack_fallible(yyjson_mut_doc *doc, const char *ctx) 
     return stack;
 }
 
+/* REQUIRE_STACK: Macro to fetch the stack and ensure it has at least 'required_size' elements; fatal otherwise. */
+#define REQUIRE_STACK(doc, required_size)\
+    ({\
+        yyjson_mut_val *__stack = get_stack_fallible(doc, __func__);\
+        if (yyjson_mut_arr_size(__stack) < (required_size)) {\
+            jisp_fatal(doc, "%s: need at least %zu values on stack", __func__, (size_t)(required_size));\
+        }\
+        __stack;\
+    })
+
 
 /* JISP op function signature (no explicit args) */
 typedef void (*jisp_op)(yyjson_mut_doc *doc);
@@ -838,10 +848,7 @@ static void jisp_stack_log_remove_last(yyjson_mut_doc *doc, yyjson_mut_val *stac
 /* pop_and_store: Stores a value under a key from the stack into the document; use when a [value, key] pair has been prepared on the stack. */
 void pop_and_store(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = get_root_fallible(doc, "pop_and_store");
-    yyjson_mut_val *stack = get_stack_fallible(doc, "pop_and_store");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "pop_and_store: need at least [value, key] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
 
     jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *key_val_mut = yyjson_mut_arr_remove_last(stack);
@@ -872,10 +879,7 @@ void pop_and_store(yyjson_mut_doc *doc) {
 
 /* duplicate_top: Duplicates the top stack value to model a pure stack operation; use to preserve and copy the current top. */
 void duplicate_top(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "duplicate_top");
-    if (yyjson_mut_arr_size(stack) == 0) {
-        jisp_fatal(doc, "duplicate_top: stack is empty");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     /* log and pop the current top */
     jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *last = yyjson_mut_arr_remove_last(stack);
@@ -893,10 +897,7 @@ void duplicate_top(yyjson_mut_doc *doc) {
 
 /* add_two_top: Adds the two topmost numeric values and pushes the sum; use for simple arithmetic over the stack. */
 void add_two_top(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "add_two_top");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "add_two_top: need at least two values on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
 
     /* Begin a residual group so both pops and the push are undone together. */
     yyjson_mut_val *group = residual_group_begin(doc);
@@ -953,10 +954,7 @@ static void map_over_iterate(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson_
 }
 
 void map_over(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "map_over");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "map_over: need at least [data_array, function_array] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
 
     yyjson_mut_val *group = residual_group_begin(doc);
 
@@ -1024,10 +1022,7 @@ static void assign_scalar_to_target(yyjson_mut_doc *doc, yyjson_mut_val *target,
 /* json_get: Pops a RFC 6901 path string and pushes the deep-copied value found at that path. */
 void json_get(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = get_root_fallible(doc, "get");
-    yyjson_mut_val *stack = get_stack_fallible(doc, "get");
-    if (yyjson_mut_arr_size(stack) < 1) {
-        jisp_fatal(doc, "get: need at least [path] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
 
     yyjson_mut_val *group = residual_group_begin(doc);
 
@@ -1065,10 +1060,7 @@ void json_get(yyjson_mut_doc *doc) {
 /* json_set: Pops [value, path] (top is path) and replaces the value at that path (scalars only). */
 void json_set(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = get_root_fallible(doc, "set");
-    yyjson_mut_val *stack = get_stack_fallible(doc, "set");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "set: need at least [value, path] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
 
     yyjson_mut_val *group = residual_group_begin(doc);
 
@@ -1113,10 +1105,7 @@ void json_set(yyjson_mut_doc *doc) {
 /* json_append: Pops [value, path] (top is path) and appends value to array at path. */
 void json_append(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = get_root_fallible(doc, "append");
-    yyjson_mut_val *stack = get_stack_fallible(doc, "append");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "append: need at least [value, path] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
 
     yyjson_mut_val *group = residual_group_begin(doc);
 
@@ -1180,10 +1169,7 @@ void json_append(yyjson_mut_doc *doc) {
 
 /* ptr_new: Pops a path string from stack, resolves to jpm_ptr, pushes to C pointer stack. */
 void ptr_new(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "ptr_new");
-    if (yyjson_mut_arr_size(stack) < 1) {
-        jisp_fatal(doc, "ptr_new: need [path] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     
     /* Pop path string */
     jisp_stack_log_remove_last(doc, stack);
@@ -1235,10 +1221,7 @@ void ptr_get(yyjson_mut_doc *doc) {
 
 /* ptr_set: Peeks the top pointer, pops value from stack, overwrites pointer target. */
 void ptr_set(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "ptr_set");
-    if (yyjson_mut_arr_size(stack) < 1) {
-        jisp_fatal(doc, "ptr_set: need [value] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     
     jpm_ptr p = ptr_stack_peek();
     if (!jpm_is_valid(p)) {
@@ -1408,10 +1391,7 @@ static bool check_and_clear_exit_interrupt(yyjson_mut_doc *doc) {
 
 /* enter: Pops target from stack. If string path, executes array at path. If array, executes it in-place. */
 void enter(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "enter");
-    if (yyjson_mut_arr_size(stack) < 1) {
-        jisp_fatal(doc, "enter: stack underflow");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     
     // Peek top to see what it is
     yyjson_mut_val *top = yyjson_mut_arr_remove_last(stack); // Pop it!
@@ -1532,10 +1512,7 @@ static void print_jisp_error_pretty(yyjson_mut_val *val) {
 }
 
 void op_print_error(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "print_error");
-    if (yyjson_mut_arr_size(stack) < 1) {
-        jisp_fatal(doc, "print_error: stack underflow");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     
     jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *val = yyjson_mut_arr_remove_last(stack);
@@ -1544,10 +1521,7 @@ void op_print_error(yyjson_mut_doc *doc) {
 }
 
 void op_load(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "load");
-    if (yyjson_mut_arr_size(stack) < 1) {
-        jisp_fatal(doc, "load: need [path] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
     
     jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
@@ -1585,10 +1559,7 @@ void op_load(yyjson_mut_doc *doc) {
 }
 
 void op_store(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "store");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "store: need [value, path] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
     
     jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
@@ -1615,10 +1586,7 @@ void op_store(yyjson_mut_doc *doc) {
 }
 
 void op_test(yyjson_mut_doc *doc) {
-    yyjson_mut_val *stack = get_stack_fallible(doc, "test");
-    if (yyjson_mut_arr_size(stack) < 2) {
-        jisp_fatal(doc, "test: need [program, expected] on stack");
-    }
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
     
     jisp_stack_log_remove_last(doc, stack);
     yyjson_mut_val *expected = yyjson_mut_arr_remove_last(stack);
@@ -1720,7 +1688,7 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
     if (!yyjson_mut_arr_iter_init(ep, &it)) {
-        pop_call_stack(doc);
+        pop_call_stack(doc);        
         return;
     }
 
@@ -1807,7 +1775,6 @@ int main(int argc, char **argv) {
     yyjson_doc_free(in);
 
     process_entrypoint(doc);
-    print_json(doc);
     jpm_doc_release(doc);
     free(buf);
     ptr_stack_free_all();
