@@ -1700,16 +1700,120 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     process_ep_array(doc, ep, "/entrypoint");
 }
 
-/* main: Orchestrates program flow from input file to execution and output; run as the CLI entry point. */
-int main(int argc, char **argv) {
-    if (argc < 2) {
-        fprintf(stderr, "Usage: %s test.json\n", argv[0]);
-        return 1;
+static void jisp_process_stream(FILE *fp, const char *filename) {
+    size_t buf_cap = 65536; // Start with 64KB
+    char *buf = (char *)malloc(buf_cap);
+    if (!buf) jisp_fatal(NULL, "Out of memory allocating stream buffer");
+    
+    size_t buf_len = 0; // Bytes currently in buffer
+    
+    while (true) {
+        // Refill buffer
+        size_t to_read = buf_cap - buf_len;
+        size_t n = fread(buf + buf_len, 1, to_read, fp);
+        buf_len += n;
+        
+        if (n == 0 && buf_len == 0) {
+             break; // EOF and empty
+        }
+        
+        // Process buffer
+        size_t offset = 0;
+        while (offset < buf_len) {
+            // Skip leading whitespace manually to track consumption
+            while (offset < buf_len && isspace((unsigned char)buf[offset])) {
+                offset++;
+            }
+            
+            if (offset == buf_len) {
+                 // Only trailing whitespace in this chunk
+                 if (n == 0 && feof(fp)) {
+                     goto cleanup; // EOF and only whitespace left -> Done
+                 }
+                 break; // Need more data
+            }
+            
+            yyjson_read_err err;
+            // Attempt to parse one JSON value
+            yyjson_doc *in = yyjson_read_opts(buf + offset, 
+                                              buf_len - offset, 
+                                              YYJSON_READ_STOP_WHEN_DONE | YYJSON_READ_ALLOW_COMMENTS | YYJSON_READ_ALLOW_TRAILING_COMMAS, 
+                                              NULL, 
+                                              &err);
+                                              
+            if (in) {
+                 // Success
+                 size_t read_size = yyjson_doc_get_read_size(in);
+                 
+                 // Convert to mutable doc and execute
+                 yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+                 yyjson_mut_val *root = yyjson_val_mut_copy(doc, yyjson_doc_get_root(in));
+                 yyjson_mut_doc_set_root(doc, root);
+                 jpm_doc_retain(doc);
+                 
+                 yyjson_doc_free(in);
+                 
+                 // Update context for error reporting during execution
+                 g_jisp_ctx.filename = filename;
+                 g_jisp_ctx.src = buf + offset; 
+                 g_jisp_ctx.src_len = read_size;
+                 
+                 process_entrypoint(doc);
+                 jpm_doc_release(doc);
+                 
+                 offset += read_size;
+            } else {
+                 // Parse error
+                 if (err.code == YYJSON_READ_ERROR_UNEXPECTED_END) {
+                     // Incomplete JSON, break to read more
+                     break;
+                 } else {
+                     // Fatal parse error
+                     jisp_fatal_parse(NULL, filename, buf + offset, buf_len - offset, err.pos, "Parse error: %s", err.msg);
+                 }
+            }
+        }
+        
+        // Move remaining data to front
+        if (offset > 0) {
+            size_t remaining = buf_len - offset;
+            if (remaining > 0) {
+                memmove(buf, buf + offset, remaining);
+            }
+            buf_len = remaining;
+        }
+        
+        // Handle buffer full or EOF conditions
+        if (buf_len == buf_cap) {
+            if (n == 0) {
+                 // EOF, buffer full, parse failed (UNEXPECTED_END)
+                 yyjson_read_err err;
+                 yyjson_read_opts(buf, buf_len, YYJSON_READ_STOP_WHEN_DONE | YYJSON_READ_ALLOW_COMMENTS, NULL, &err);
+                 jisp_fatal_parse(NULL, filename, buf, buf_len, err.pos, "Unexpected end of stream: %s", err.msg);
+            }
+            
+            // Expand buffer
+            size_t new_cap = buf_cap * 2;
+            char *new_buf = (char *)realloc(buf, new_cap);
+            if (!new_buf) {
+                free(buf);
+                jisp_fatal(NULL, "Out of memory expanding stream buffer");
+            }
+            buf = new_buf;
+            buf_cap = new_cap;
+        } else if (n == 0 && buf_len > 0) {
+             // EOF, data remains, incomplete JSON
+             yyjson_read_err err;
+             yyjson_read_opts(buf, buf_len, YYJSON_READ_STOP_WHEN_DONE | YYJSON_READ_ALLOW_COMMENTS, NULL, &err);
+             jisp_fatal_parse(NULL, filename, buf, buf_len, err.pos, "Invalid data at end of stream: %s", err.msg);
+        }
     }
-    /* Initialize global JISP op registry (JSON doc) */
-    jisp_op_registry_init();
-    // Load initial JSON from file provided as first command-line argument.
-    const char *filename = argv[1];
+
+cleanup:
+    free(buf);
+}
+
+static void jisp_process_whole_file(const char *filename) {
     FILE *fp = fopen(filename, "rb");
     if (!fp) {
         jisp_fatal(NULL, "Failed to open file: %s", filename);
@@ -1755,6 +1859,19 @@ int main(int argc, char **argv) {
     process_entrypoint(doc);
     jpm_doc_release(doc);
     free(buf);
+}
+
+/* main: Orchestrates program flow from input file to execution and output; run as the CLI entry point. */
+int main(int argc, char **argv) {
+    /* Initialize global JISP op registry (JSON doc) */
+    jisp_op_registry_init();
+
+    if (argc < 2) {
+        jisp_process_stream(stdin, "stdin");
+    } else {
+        jisp_process_whole_file(argv[1]);
+    }
+    
     ptr_stack_free_all();
     jisp_op_registry_free();
     return 0;
