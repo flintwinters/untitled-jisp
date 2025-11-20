@@ -108,11 +108,7 @@ JISP supports "Time Travel Debugging" (Undo) via JSON Patch (RFC 6902).
 - **Grouping:** Operations like `map_over` or `add_two_top` group their patches. A single `undo_last_residual` reverts the entire logical step (e.g., reversing the entire map operation or the arithmetic).
 
 ## 6. Call Stack
-JISP maintains a runtime call stack in `root["call_stack"]`.
-- It is an array of strings (JSON Pointers to the execution frames).
-- `process_entrypoint` and `enter` push to this stack.
-- `exit` and function return pop from this stack.
-- Useful for debugging and introspection.
+The Call Stack is a critical component of JISP's introspection capabilities, maintained as a JSON array of strings at `root["call_stack"]`. Unlike opaque internal stacks in traditional VMs, this structure is fully visible and serializable within the document. Each entry is a JSON Pointer that identifies the path of the active execution frame (e.g., `/entrypoint`, `/my_macro`, or `/nested/logic/0/.`). When a new instruction array is entered—whether through the main entrypoint, a macro expansion, or the `enter` opcode—its path is pushed to this list. When the frame completes or an `exit` opcode is encountered, the path is popped. This design ensures that a `print_json` or fatal error dump provides an immediate, human-readable trace of the program's execution flow up to that point.
 
 ## 7. Error Handling & Diagnostics
 JISP provides robust error reporting for both parsing and runtime failures.
