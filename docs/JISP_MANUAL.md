@@ -1,6 +1,6 @@
 # JISP Technical Manual
 
-**Version:** 1.1  
+**Version:** 1.2  
 **Date:** November 19, 2025  
 **Context:** Embedded C JSON Runtime
 
@@ -15,7 +15,7 @@ This manual describes the architecture, memory model, instruction set, and exten
 JISP does not have separate "RAM". The JSON document *is* the memory.
 - **Root Object:** The execution context is the root object of the mutable `yyjson` document.
 - **The Stack (`root["stack"]`):** A heterogeneous array used for passing arguments and return values.
-- **Registers/Heap:** Any other key in the root object acts as a register or heap storage (e.g., `root["temp_sum"]`, `root["final_result"]`).
+- **Registers/Heap:** Any other key in the root object acts as a register or heap storage.
 
 ### 2.2. Execution Model
 Execution is driven by processing an **Entrypoint Array** (`root["entrypoint"]`).
@@ -24,6 +24,11 @@ The interpreter iterates through this array, treating elements as instructions:
 2.  **Directives:** Objects containing a special `.` key are treated as directives.
     - `{ ".": "op_name" }`: Invokes the opcode or macro named "op_name".
     - `{ ".": [...] }`: Executes the nested array as a subroutine.
+
+### 2.3. Design Philosophy
+- **Unified State:** Code, data, stack, and registers reside in one serializable JSON object. This allows `print_json` to produce a complete, restorable snapshot of the machine state at any point, facilitating "Time Travel Debugging".
+- **Safety & Diagnostics:** JISP prioritizes fail-fast behavior. Invalid paths or types trigger fatal errors with C-level stack traces (via `libbfd`) and JSON state dumps, rather than undefined behavior.
+- **Hidden Pointer Stack (JPM):** To efficiently manipulate mutable values without constant path resolution, JISP employs a hidden C-side pointer stack (`ptr_new`, `ptr_get`, `ptr_set`). This "pins" values for efficient modification.
 
 ## 3. Instruction Set (Opcodes)
 
@@ -38,8 +43,7 @@ Opcodes consume arguments from the top of `root["stack"]` (LIFO) and push result
 ### 3.2. Arithmetic
 | Opcode | Stack (Before) -> (After) | Description |
 | :--- | :--- | :--- |
-| `add_two_top` | `[..., A, B]` -> `[..., A+B]` | Pops two numbers, adds them, pushes result. |
-| `calculate_final_result` | `[..., N]` -> `[..., N]` | Reads `root.temp_sum` and `root.temp_mult`, adds stack top `N`, writes to `root.final_result`. |
+| `add_two_top` | `[..., A, B]` -> `[..., A+B]` | Pops two numbers, adds them, pushes result. Supports residual grouping. |
 
 ### 3.3. JSON Operations
 | Opcode | Stack (Before) -> (After) | Description |
@@ -61,40 +65,23 @@ JISP maintains a separate, parallel **Pointer Stack** on the C side (not visible
 ### 3.5. Control Flow
 | Opcode | Stack (Before) -> (After) | Description |
 | :--- | :--- | :--- |
-| `map_over` | `[..., DataArr, FuncArr]` -> `[..., ResArr]` | Applies `FuncArr` (entrypoint) to each item in `DataArr`. |
-
-### 3.6. System / Debug
-| Opcode | Description |
-| :--- | :--- |
-| `print_json` | Prints the current document state to stdout. |
-| `undo_last_residual` | Reverses the last recorded mutation (see Section 5). |
-
-### 3.5. Control Flow
-| Opcode | Stack (Before) -> (After) | Description |
-| :--- | :--- | :--- |
-| `map_over` | `[..., DataArr, FuncArr]` -> `[..., ResArr]` | Applies `FuncArr` (entrypoint) to each item in `DataArr`. |
+| `map_over` | `[..., DataArr, FuncArr]` -> `[..., ResArr]` | Applies `FuncArr` (entrypoint) to each item in `DataArr`. Pushes result array. |
 | `enter` | `[..., Target]` -> `[...]` | Transfers execution to `Target`. `Target` can be a path string (resolves to array) or an array literal. Pushes current frame path to `root["call_stack"]`. |
 | `exit` | `[...]` -> `[...]` | Returns from the current execution frame. Pops from `root["call_stack"]`. |
 
-### 3.6. Call Stack
-JISP maintains a runtime call stack in `root["call_stack"]`.
-- It is an array of strings (JSON Pointers to the execution frames).
-- `process_entrypoint` and `enter` push to this stack.
-- `exit` and function return pop from this stack.
-- Useful for debugging and introspection.
-
-### 3.7. System / Debug
-| Opcode | Description |
-| :--- | :--- |
-| `print_json` | Prints the current document state to stdout. |
-| `undo_last_residual` | Reverses the last recorded mutation (see Section 5). |
-
-### 3.8. Testing
+### 3.6. System / Debug
 | Opcode | Stack (Before) -> (After) | Description |
 | :--- | :--- | :--- |
-| `test` | `[..., Prog, Expect]` -> `[..., "ERROR"?]` | Executes `Prog` (full JISP program doc) in a sandbox. Compares result against `Expect` (subset match). If mismatch, pushes "ERROR". |
+| `print_json` | `[...]` -> `[...]` | Prints the current document state to stdout. |
+| `print_error` | `[..., ErrObj]` -> `[...]` | Pretty-prints a JISP error object (popped from stack). |
+| `undo_last_residual` | `[...]` -> `[...]` | Reverses the last recorded mutation. |
 
-### 3.9. I/O Operations
+### 3.7. Testing
+| Opcode | Stack (Before) -> (After) | Description |
+| :--- | :--- | :--- |
+| `test` | `[..., Prog, Expect]` -> `[...]` or `[..., Err]` | Executes `Prog` in a sandbox. Compares result against `Expect` (subset match). If mismatch, pushes an Error Object. |
+
+### 3.8. I/O Operations
 | Opcode | Stack (Before) -> (After) | Description |
 | :--- | :--- | :--- |
 | `load` | `[..., Path]` -> `[..., JSONVal]` | Reads JSON file at `Path` and pushes its root value. Fatals on error. |
@@ -115,37 +102,21 @@ JISP supports "Time Travel Debugging" (Undo) via JSON Patch (RFC 6902).
     - **Add/Append:** Recorded as `{"op": "add", ...}`.
     - **Remove:** Recorded as `{"op": "remove", ...}`. Value is captured for restoration.
     - **Replace:** Recorded as `{"op": "replace", ...}`.
-- **Grouping:** Atomic operations (like `map_over`) group their patches so a single `undo_last_residual` reverts the entire logical step.
+- **Grouping:** Operations like `map_over` or `add_two_top` group their patches. A single `undo_last_residual` reverts the entire logical step (e.g., reversing the entire map operation or the arithmetic).
 
-## 6. Example Program
-
-```json
-{
-  "stack": [],
-  "entrypoint": [
-    "/stack/0",
-    { ".": "ptr_new" },
-    100,
-    { ".": "ptr_set" },
-    { ".": "ptr_release" },
-    { ".": "print_json" }
-  ]
-}
-```
-**Execution:**
-1. Push path string `"/stack/0"`.
-2. `ptr_new`: Pops path, pushes pointer to `stack[0]` to C-stack.
-3. Push `100`.
-4. `ptr_set`: Pops `100`, overwrites value at pointer (stack[0]) with 100.
-5. `ptr_release`: Clean up pointer.
-6. `print_json`: Show result.
+## 6. Call Stack
+JISP maintains a runtime call stack in `root["call_stack"]`.
+- It is an array of strings (JSON Pointers to the execution frames).
+- `process_entrypoint` and `enter` push to this stack.
+- `exit` and function return pop from this stack.
+- Useful for debugging and introspection.
 
 ## 7. Error Handling & Diagnostics
 JISP provides robust error reporting for both parsing and runtime failures.
 
 - **Fatal Errors:** Aborts execution with a descriptive message and a JSON state snapshot.
 - **Parse Errors:** Reports the exact byte offset, line, and column of invalid JSON input.
-- **Stack Traces:** On fatal errors (assertion failures, segfaults, or explicit `jisp_fatal` calls), JISP prints a C-level stack trace using `bfd` (Binary File Descriptor) and `backtrace`. This resolves memory addresses to function names, source files, and line numbers for easier debugging.
+- **Stack Traces:** On fatal errors, JISP prints a C-level stack trace using `bfd` and `backtrace`. This resolves memory addresses to function names, source files, and line numbers.
 
 ## 8. Build & Dependencies
 JISP depends on:
