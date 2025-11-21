@@ -361,7 +361,8 @@ typedef enum jisp_op_id {
     JISP_OP_PRINT_ERROR = 18,
     JISP_OP_LOAD = 19,
     JISP_OP_STORE = 20,
-    JISP_OP_STEP = 21
+    JISP_OP_STEP = 21,
+    JISP_OP_ASSERT_SUBSET = 22
 } jisp_op_id;
 
 void enter(yyjson_mut_doc *doc);
@@ -370,6 +371,7 @@ void op_test(yyjson_mut_doc *doc);
 void op_print_error(yyjson_mut_doc *doc);
 void op_load(yyjson_mut_doc *doc);
 void op_store(yyjson_mut_doc *doc);
+void op_assert_subset(yyjson_mut_doc *doc);
 
 static void process_entrypoint(yyjson_mut_doc *doc);
 
@@ -397,6 +399,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_LOAD: return op_load;
         case JISP_OP_STORE: return op_store;
         case JISP_OP_STEP: return step_jisp_op;
+        case JISP_OP_ASSERT_SUBSET: return op_assert_subset;
         default: return NULL;
     }
 }
@@ -426,6 +429,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "load", JISP_OP_LOAD);
     yyjson_mut_obj_add_int(d, root, "store", JISP_OP_STORE);
     yyjson_mut_obj_add_int(d, root, "step", JISP_OP_STEP);
+    yyjson_mut_obj_add_int(d, root, "assert_subset", JISP_OP_ASSERT_SUBSET);
     g_jisp_op_registry = d;
 }
 
@@ -1660,6 +1664,28 @@ void op_test(yyjson_mut_doc *doc) {
     
     jpm_doc_release(sub_doc);
 }
+ 
+void op_assert_subset(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 2);
+
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *expected = yyjson_mut_arr_remove_last(stack);
+
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *actual = yyjson_mut_arr_remove_last(stack);
+
+    if (!json_subset_equals(expected, actual)) {
+        yyjson_mut_val *error_obj = jisp_create_error(doc, "assert_failure", "Assertion failed: subset mismatch");
+        yyjson_mut_val *details = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_val(doc, error_obj, "details", details);
+
+        yyjson_mut_obj_add_val(doc, details, "expected", jisp_mut_deep_copy(doc, expected));
+        yyjson_mut_obj_add_val(doc, details, "actual", jisp_mut_deep_copy(doc, actual));
+
+        yyjson_mut_arr_append(stack, error_obj);
+        record_patch_add_val(doc, "/stack/-", yyjson_mut_arr_get_last(stack));
+    }
+}
 
 static void process_ep_object(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson_mut_val *elem, const char *path_prefix, size_t idx) {
     yyjson_mut_val *dot = yyjson_mut_obj_get(elem, ".");
@@ -1774,7 +1800,9 @@ void step_jisp_op(yyjson_mut_doc *doc) {
         yyjson_mut_val *instruction = yyjson_mut_arr_get(entrypoint, 0);
 
         yyjson_mut_val *sub_stack = get_stack_fallible(sub_doc, "step");
+        push_call_stack(sub_doc, "/entrypoint");
         process_one_instruction(sub_doc, sub_stack, instruction, "/entrypoint", 0);
+        pop_call_stack(sub_doc);
 
         // Build a new entrypoint array without the first element.
         yyjson_mut_val *new_ep = yyjson_mut_arr(sub_doc);

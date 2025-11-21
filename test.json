@@ -41,45 +41,44 @@
             "entrypoint": [1, 2, {".": "add_two_top"}],
             "stack": [],
             "is_reversible": true,
-            "residual": [],
-            "pc": 0
+            "residual": []
         },
 
         // Step 1: Push 1
         {".": "step"},
         {".": "duplicate_top"},
         { "stack": [1] },
-        {".": "test"},
+        {".": "assert_subset"},
         
         // Step 2: Push 2
         {".": "step"},
         {".": "duplicate_top"},
         { "stack": [1, 2] },
-        {".": "test"},
+        {".": "assert_subset"},
         
         // Step 3: Add
         {".": "step"},
         {".": "duplicate_top"},
         { "stack": [3] },
-        {".": "test"},
+        {".": "assert_subset"},
 
         
         // Undo Step 3
         {".": "undo"},
         {".": "duplicate_top"},
         { "stack": [1, 2] },
-        {".": "test"},
+        {".": "assert_subset"},
 
         // Undo Step 2
         {".": "undo"},
         {".": "duplicate_top"},
         { "stack": [1] },
-        {".": "test"},
+        {".": "assert_subset"},
         
         // Undo Step 1
         {".": "undo"},
         { "stack": [] },
-        {".": "test"},
+        {".": "assert_subset"},
         
 
         {".": "print_json"}
