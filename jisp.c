@@ -1757,15 +1757,6 @@ void step_jisp_op(yyjson_mut_doc *doc) {
     yyjson_mut_doc_set_root(sub_doc, sub_root);
     jpm_doc_retain(sub_doc);
 
-    // Get PC
-    yyjson_mut_val *pc_val = yyjson_mut_obj_get(sub_root, "pc");
-    int64_t pc = 0;
-    if (pc_val && yyjson_mut_is_int(pc_val)) {
-        pc = yyjson_mut_get_sint(pc_val);
-    } else {
-        yyjson_mut_obj_add_int(sub_doc, sub_root, "pc", 0);
-    }
-
     // Get entrypoint
     yyjson_mut_val *entrypoint = yyjson_mut_obj_get(sub_root, "entrypoint");
     if (!entrypoint || !yyjson_mut_is_arr(entrypoint)) {
@@ -1778,15 +1769,34 @@ void step_jisp_op(yyjson_mut_doc *doc) {
     }
 
     size_t ep_size = yyjson_mut_arr_size(entrypoint);
-    if (pc >= 0 && (size_t)pc < ep_size) {
-        yyjson_mut_val *instruction = yyjson_mut_arr_get(entrypoint, (size_t)pc);
-        
-        yyjson_mut_val *sub_stack = get_stack_fallible(sub_doc, "step");
-        process_one_instruction(sub_doc, sub_stack, instruction, "/entrypoint", (size_t)pc);
+    if (ep_size > 0) {
+        // Execute the first instruction, then remove it from the entrypoint (no explicit PC field).
+        yyjson_mut_val *instruction = yyjson_mut_arr_get(entrypoint, 0);
 
-        yyjson_mut_obj_add_val(sub_doc, sub_root, "pc", yyjson_mut_int(sub_doc, pc + 1));
+        yyjson_mut_val *sub_stack = get_stack_fallible(sub_doc, "step");
+        process_one_instruction(sub_doc, sub_stack, instruction, "/entrypoint", 0);
+
+        // Build a new entrypoint array without the first element.
+        yyjson_mut_val *new_ep = yyjson_mut_arr(sub_doc);
+        yyjson_mut_arr_iter it;
+        yyjson_mut_val *elem;
+        size_t idx = 0;
+        yyjson_mut_arr_iter_init(entrypoint, &it);
+        while ((elem = yyjson_mut_arr_iter_next(&it))) {
+            if (idx++ == 0) continue; // skip first executed instruction
+            yyjson_mut_val *copy = jisp_mut_deep_copy(sub_doc, elem);
+            yyjson_mut_arr_append(new_ep, copy);
+        }
+        // Replace the entrypoint field.
+        yyjson_mut_obj_remove_key(sub_root, "entrypoint");
+        yyjson_mut_obj_add_val(sub_doc, sub_root, "entrypoint", new_ep);
+
+        // Remove any legacy 'pc' if present.
+        if (yyjson_mut_obj_get(sub_root, "pc")) {
+            yyjson_mut_obj_remove_key(sub_root, "pc");
+        }
     }
-    
+
     yyjson_mut_val *result = yyjson_mut_doc_get_root(sub_doc);
     yyjson_mut_val *result_copy = jisp_mut_deep_copy(doc, result);
     yyjson_mut_arr_append(stack, result_copy);
