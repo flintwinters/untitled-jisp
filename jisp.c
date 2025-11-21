@@ -804,7 +804,8 @@ static void residual_group_add_patch_with_val(yyjson_mut_doc *doc,
     if (!patch) return;
     yyjson_mut_obj_add_strcpy(doc, patch, "op", op);
     yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
-    if (val) {
+    bool skip_value = (strcmp(op, "add") == 0 && strcmp(path, "/stack/-") == 0);
+    if (val && !skip_value) {
         yyjson_mut_val *vcopy = jisp_mut_deep_copy(doc, val);
         if (vcopy) {
             yyjson_mut_obj_add_val(doc, patch, "value", vcopy);
@@ -828,7 +829,9 @@ static void residual_group_add_patch_with_real(yyjson_mut_doc *doc,
     if (!patch) return;
     yyjson_mut_obj_add_strcpy(doc, patch, "op", op);
     yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
-    yyjson_mut_obj_add_real(doc, patch, "value", num);
+    if (!(strcmp(op, "add") == 0 && strcmp(path, "/stack/-") == 0)) {
+        yyjson_mut_obj_add_real(doc, patch, "value", num);
+    }
     yyjson_mut_arr_append(group, patch);
 }
 
