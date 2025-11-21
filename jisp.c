@@ -466,49 +466,90 @@ static yyjson_mut_val *ensure_root_object(yyjson_mut_doc *doc) {
     return root;
 }
 
-/* Ensure root["ref"] exists and is a numeric field; returns the value node. */
-static yyjson_mut_val *ensure_ref_field(yyjson_mut_doc *doc) {
-    yyjson_mut_val *root = ensure_root_object(doc);
-    if (!root) return NULL;
+/* Side-table based doc refcount to avoid collisions with user JSON (e.g. "ref" field) and prevent leaks. */
+typedef struct DocRefNode {
+    yyjson_mut_doc *doc;
+    size_t count;
+    struct DocRefNode *next;
+} DocRefNode;
 
-    yyjson_mut_val *ref = yyjson_mut_obj_get(root, "ref");
-    if (!ref) {
-        /* Initialize "ref" to 0 if absent. */
-        yyjson_mut_obj_add_int(doc, root, "ref", 0);
-        ref = yyjson_mut_obj_get(root, "ref");
-    } else {
-        /* Coerce to integer numeric type if it exists (value preserved if numeric, becomes 0 if non-numeric). */
-        int64_t cur = (int64_t)yyjson_mut_get_sint(ref);
-        unsafe_yyjson_set_sint(ref, cur);
+static DocRefNode *g_docref_head = NULL;
+static bool g_docref_atexit_registered = false;
+
+static void docref_cleanup(void) {
+    DocRefNode *cur = g_docref_head;
+    while (cur) {
+        DocRefNode *next = cur->next;
+        if (cur->doc) {
+            yyjson_mut_doc_free(cur->doc);
+        }
+        free(cur);
+        cur = next;
     }
-    return ref;
+    g_docref_head = NULL;
 }
 
-/* Retain: increments root["ref"]; creates it if missing. */
-static void jpm_doc_retain(yyjson_mut_doc *doc) {
-    if (!doc) return;
-    yyjson_mut_val *ref = ensure_ref_field(doc);
-    if (!ref) return;
-    int64_t cur = (int64_t)yyjson_mut_get_sint(ref);
-    if (cur < 0) cur = 0;
-    unsafe_yyjson_set_sint(ref, cur + 1);
+static DocRefNode *docref_find(yyjson_mut_doc *doc) {
+    for (DocRefNode *n = g_docref_head; n; n = n->next) {
+        if (n->doc == doc) return n;
+    }
+    return NULL;
 }
 
-/* Release: decrements root["ref"]; frees doc when it reaches zero. */
-static void jpm_doc_release(yyjson_mut_doc *doc) {
+static void docref_retain(yyjson_mut_doc *doc) {
     if (!doc) return;
-    yyjson_mut_val *ref = ensure_ref_field(doc);
-    if (!ref) {
-        /* Fallback: no ref field; free immediately to avoid leak. */
+    if (!g_docref_atexit_registered) {
+        atexit(docref_cleanup);
+        g_docref_atexit_registered = true;
+    }
+    DocRefNode *n = docref_find(doc);
+    if (n) {
+        n->count++;
+        return;
+    }
+    n = (DocRefNode *)calloc(1, sizeof(DocRefNode));
+    if (!n) return;
+    n->doc = doc;
+    n->count = 1;
+    n->next = g_docref_head;
+    g_docref_head = n;
+}
+
+static void docref_release(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    DocRefNode *prev = NULL;
+    DocRefNode *n = g_docref_head;
+    while (n) {
+        if (n->doc == doc) break;
+        prev = n;
+        n = n->next;
+    }
+    if (!n) {
+        /* Unknown doc; free immediately to avoid leaks. */
         yyjson_mut_doc_free(doc);
         return;
     }
-    int64_t cur = (int64_t)yyjson_mut_get_sint(ref);
-    if (cur > 0) cur--;
-    unsafe_yyjson_set_sint(ref, cur);
-    if (cur == 0) {
-        yyjson_mut_doc_free(doc);
+    if (n->count > 1) {
+        n->count--;
+        return;
     }
+    /* count will reach zero: unlink and free doc */
+    if (prev) prev->next = n->next;
+    else g_docref_head = n->next;
+    yyjson_mut_doc_free(n->doc);
+    free(n);
+}
+
+/* Retain: increments side-table refcount for the doc. */
+static void jpm_doc_retain(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    docref_retain(doc);
+}
+
+/* Release: decrements side-table refcount; frees doc when it reaches zero. */
+static void jpm_doc_release(yyjson_mut_doc *doc) {
+    if (!doc) return;
+    docref_release(doc);
 }
 
 
