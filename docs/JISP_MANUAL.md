@@ -110,14 +110,37 @@ JISP supports "Time Travel Debugging" (Undo) via JSON Patch (RFC 6902).
 ## 6. Call Stack
 The Call Stack is a critical component of JISP's introspection capabilities, maintained as a JSON array of strings at `root["call_stack"]`. Unlike opaque internal stacks in traditional VMs, this structure is fully visible and serializable within the document. Each entry is a JSON Pointer that identifies the path of the active execution frame (e.g., `/entrypoint`, `/my_macro`, or `/nested/logic/0/.`). When a new instruction array is entered—whether through the main entrypoint, a macro expansion, or the `enter` opcode—its path is pushed to this list. When the frame completes or an `exit` opcode is encountered, the path is popped. This design ensures that a `print_json` or fatal error dump provides an immediate, human-readable trace of the program's execution flow up to that point.
 
-## 7. Error Handling & Diagnostics
+## 7. Example Program
+
+```json
+{
+  "stack": [],
+  "entrypoint": [
+    "/stack/0",
+    { ".": "ptr_new" },
+    100,
+    { ".": "ptr_set" },
+    { ".": "ptr_release" },
+    { ".": "print_json" }
+  ]
+}
+```
+**Execution:**
+1. Push path string `"/stack/0"`.
+2. `ptr_new`: Pops path, pushes pointer to `stack[0]` to C-stack.
+3. Push `100`.
+4. `ptr_set`: Pops `100`, overwrites value at pointer (stack[0]) with 100.
+5. `ptr_release`: Clean up pointer.
+6. `print_json`: Show result.
+
+## 8. Error Handling & Diagnostics
 JISP provides robust error reporting for both parsing and runtime failures.
 
 - **Fatal Errors:** Aborts execution with a descriptive message and a JSON state snapshot.
 - **Parse Errors:** Reports the exact byte offset, line, and column of invalid JSON input.
 - **Stack Traces:** On fatal errors, JISP prints a C-level stack trace using `bfd` and `backtrace`. This resolves memory addresses to function names, source files, and line numbers.
 
-## 8. Build & Dependencies
+## 9. Build & Dependencies
 JISP depends on:
 - `yyjson` (included)
 - `libbfd` (binutils-dev) - For symbol resolution.

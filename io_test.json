@@ -26,7 +26,9 @@
         // Program: Load file
         {
              "entrypoint": ["temp_test_io.json", {".": "load"}],
-             "stack": []
+             "stack": [],
+             "residual": [],
+             "pc": 0
         },
         // Expected
         {

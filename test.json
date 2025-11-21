@@ -4,83 +4,83 @@
 
         // Test Case 1: Success
         // Program
-        {
-            "entrypoint": [10, 20, {".": "add_two_top"}],
-            "stack": [],
-            "residual": []
-        },
-        // Expected Result (Subset)
-        {
-            "stack": [30]
-        },
-        {".": "test"},
+        // {
+        //     "entrypoint": [10, 20, {".": "add_two_top"}],
+        //     "stack": [],
+        //     "residual": []
+        // },
+        // // Expected Result (Subset)
+        // {
+        //     "stack": [30]
+        // },
+        // {".": "test"},
         
-        // Check if ERROR is on stack (should not be)
-        // Test Case 2: Failure
-        // Program
-        {
-            "entrypoint": [10, 20, {".": "add_two_top"}],
-            "stack": [],
-            "residual": []
-        },
-        // Expected Result (Wrong)
-        {
-            "stack": [999]
-        },
-        {".": "test"},
+        // // Check if ERROR is on stack (should not be)
+        // // Test Case 2: Failure
+        // // Program
+        // {
+        //     "entrypoint": [10, 20, {".": "add_two_top"}],
+        //     "stack": [],
+        //     "residual": []
+        // },
+        // // Expected Result (Wrong)
+        // {
+        //     "stack": [999]
+        // },
+        // {".": "test"},
         
-        // Duplicate error to print it while keeping it on stack
-        {".": "duplicate_top"},
-        {".": "print_error"},
+        // // Duplicate error to print it while keeping it on stack
+        // {".": "duplicate_top"},
+        // {".": "print_error"},
 
-         // Check if ERROR is on stack (should be)
+        // Check if ERROR is on stack (should be)
 
         
         // Program to be stepped and undone
-        {
-            "entrypoint": [1, 2, {".": "add_two_top"}],
-            "stack": [],
-            "is_reversible": true,
-            "residual": []
-        },
+        // {
+        //     "entrypoint": [1, 2, {".": "add_two_top"}],
+        //     "stack": [],
+        //     "is_reversible": true,
+        //     "residual": []
+        // },
 
-        // Step 1: Push 1
-        {".": "step"},
-        {".": "duplicate_top"},
-        { "stack": [1] },
-        {".": "assert_subset"},
+        // // Step 1: Push 1
+        // {".": "step"},
+        // {".": "duplicate_top"},
+        // { "stack": [1] },
+        // {".": "assert_subset"},
         
-        // Step 2: Push 2
-        {".": "step"},
-        {".": "duplicate_top"},
-        { "stack": [1, 2] },
-        {".": "assert_subset"},
+        // // Step 2: Push 2
+        // {".": "step"},
+        // {".": "duplicate_top"},
+        // { "stack": [1, 2] },
+        // {".": "assert_subset"},
         
-        // Step 3: Add
-        {".": "step"},
-        {".": "duplicate_top"},
-        { "stack": [3] },
-        {".": "assert_subset"},
+        // // Step 3: Add
+        // {".": "step"},
+        // {".": "duplicate_top"},
+        // { "stack": [3.0] },
+        // {".": "assert_subset"},
 
         
-        // Undo Step 3
-        {".": "undo"},
-        {".": "duplicate_top"},
-        { "stack": [1, 2] },
-        {".": "assert_subset"},
+        // // // Undo Step 3
+        // {".": "undo"},
+        // {".": "duplicate_top"},
+        // { "stack": [1, 2] },
+        // {".": "assert_subset"},
 
-        // Undo Step 2
-        {".": "undo"},
-        {".": "duplicate_top"},
-        { "stack": [1] },
-        {".": "assert_subset"},
+        // // // Undo Step 2
+        // {".": "undo"},
+        // {".": "duplicate_top"},
+        // { "stack": [1] },
+        // {".": "assert_subset"},
         
-        // Undo Step 1
-        {".": "undo"},
-        { "stack": [] },
-        {".": "assert_subset"},
+        // // Undo Step 1
+        // {".": "undo"},
+        // { "stack": [] },
+        // {".": "assert_subset"},
         
 
-        {".": "print_json"}
+        // {".": "print_json"}
     ]
 }

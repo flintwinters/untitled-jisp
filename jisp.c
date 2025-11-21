@@ -10,6 +10,11 @@
 #include <bfd.h>
 #include <dlfcn.h>
 #include <ctype.h>
+#include <errno.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include "yyjson.h"
 
 // --- Color Definitions ---
@@ -362,7 +367,10 @@ typedef enum jisp_op_id {
     JISP_OP_LOAD = 19,
     JISP_OP_STORE = 20,
     JISP_OP_STEP = 21,
-    JISP_OP_ASSERT_SUBSET = 22
+    JISP_OP_ASSERT_SUBSET = 22,
+    JISP_OP_WEB_LOAD_HTML = 23,
+    JISP_OP_WEB_CREATE_SERVER = 24,
+    JISP_OP_WEB_ACCEPT_LOOP = 25
 } jisp_op_id;
 
 void enter(yyjson_mut_doc *doc);
@@ -372,6 +380,9 @@ void op_print_error(yyjson_mut_doc *doc);
 void op_load(yyjson_mut_doc *doc);
 void op_store(yyjson_mut_doc *doc);
 void op_assert_subset(yyjson_mut_doc *doc);
+void web_load_html(yyjson_mut_doc *doc);
+void web_create_server(yyjson_mut_doc *doc);
+void web_accept_loop(yyjson_mut_doc *doc);
 
 static void process_entrypoint(yyjson_mut_doc *doc);
 
@@ -400,6 +411,9 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_STORE: return op_store;
         case JISP_OP_STEP: return step_jisp_op;
         case JISP_OP_ASSERT_SUBSET: return op_assert_subset;
+        case JISP_OP_WEB_LOAD_HTML: return web_load_html;
+        case JISP_OP_WEB_CREATE_SERVER: return web_create_server;
+        case JISP_OP_WEB_ACCEPT_LOOP: return web_accept_loop;
         default: return NULL;
     }
 }
@@ -430,6 +444,9 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "store", JISP_OP_STORE);
     yyjson_mut_obj_add_int(d, root, "step", JISP_OP_STEP);
     yyjson_mut_obj_add_int(d, root, "assert_subset", JISP_OP_ASSERT_SUBSET);
+    yyjson_mut_obj_add_int(d, root, "web_load_html", JISP_OP_WEB_LOAD_HTML);
+    yyjson_mut_obj_add_int(d, root, "web_create_server", JISP_OP_WEB_CREATE_SERVER);
+    yyjson_mut_obj_add_int(d, root, "web_accept_loop", JISP_OP_WEB_ACCEPT_LOOP);
     g_jisp_op_registry = d;
 }
 
@@ -769,6 +786,30 @@ static void record_patch_with_real(yyjson_mut_doc *doc, const char *op, const ch
     yyjson_mut_arr_append(res, patch);
 }
 
+static void record_patch_with_int(yyjson_mut_doc *doc, const char *op, const char *path, int num) {
+    if (!doc || !op || !path) return;
+    if (!is_reversible_enabled(doc)) return;
+    yyjson_mut_val *res = ensure_residual_array(doc);
+    if (!res) return;
+
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", op);
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    yyjson_mut_obj_add_int(doc, patch, "value", num);
+    yyjson_mut_arr_append(res, patch);
+}
+
+static void record_patch_add_int(yyjson_mut_doc *doc, const char *path, int num) {
+    if (!doc || !path) return;
+    /* Optimize: stack appends don't need a value payload for undo. */
+    if (strcmp(path, "/stack/-") == 0) {
+        record_patch_with_val(doc, "add", path, NULL);
+    } else {
+        record_patch_with_int(doc, "add", path, num);
+    }
+}
+
 static void record_patch_add_val(yyjson_mut_doc *doc, const char *path, yyjson_mut_val *val) {
     if (!doc || !path) return;
     /* Optimize: stack appends don't need to store a value in residuals for undo. */
@@ -872,6 +913,27 @@ static void residual_group_add_patch_with_real(yyjson_mut_doc *doc,
     yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
     if (!(strcmp(op, "add") == 0 && strcmp(path, "/stack/-") == 0)) {
         yyjson_mut_obj_add_real(doc, patch, "value", num);
+    }
+    yyjson_mut_arr_append(group, patch);
+}
+
+static void residual_group_add_patch_with_int(yyjson_mut_doc *doc,
+                                               yyjson_mut_val *group,
+                                               const char *op,
+                                               const char *path,
+                                               int num) {
+    if (!doc || !op || !path) return;
+    if (!group || !yyjson_mut_is_arr(group)) {
+        /* Fallback to direct single-entry residual append */
+        record_patch_with_int(doc, op, path, num);
+        return;
+    }
+    yyjson_mut_val *patch = yyjson_mut_obj(doc);
+    if (!patch) return;
+    yyjson_mut_obj_add_strcpy(doc, patch, "op", op);
+    yyjson_mut_obj_add_strcpy(doc, patch, "path", path);
+    if (!(strcmp(op, "add") == 0 && strcmp(path, "/stack/-") == 0)) {
+        yyjson_mut_obj_add_int(doc, patch, "value", num);
     }
     yyjson_mut_arr_append(group, patch);
 }
@@ -1001,11 +1063,11 @@ void add_two_top(yyjson_mut_doc *doc) {
         jisp_fatal(doc, "add_two_top: operands must be numeric");
     }
 
-    double val1 = (double)yyjson_mut_get_sint(val1_mut);
-    double val2 = (double)yyjson_mut_get_sint(val2_mut);
-    double sum = val1 + val2;
-    yyjson_mut_arr_add_real(doc, stack, sum);
-    residual_group_add_patch_with_real(doc, group, "add", "/stack/-", sum);
+    int val1 = yyjson_mut_get_sint(val1_mut);
+    int val2 = yyjson_mut_get_sint(val2_mut);
+    int sum = val1 + val2;
+    yyjson_mut_arr_add_int(doc, stack, sum);
+    residual_group_add_patch_with_int(doc, group, "add", "/stack/-", sum);
 
     if (group) residual_group_commit(doc, group);
 }
@@ -1910,6 +1972,154 @@ static void process_entrypoint(yyjson_mut_doc *doc) {
     yyjson_mut_val *ep = yyjson_mut_obj_get(root, "entrypoint");
     if (!ep) return;
     process_ep_array(doc, ep, "/entrypoint");
+}
+
+void web_load_html(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
+    yyjson_mut_val *path_val = yyjson_mut_arr_remove_last(stack);
+    if (!yyjson_mut_is_str(path_val)) {
+        jisp_fatal(doc, "web_load_html: path must be a string");
+    }
+    const char *path = yyjson_get_str((yyjson_val *)path_val);
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        jisp_fatal(doc, "web_load_html: failed to open file '%s': %s", path, strerror(errno));
+    }
+
+    fseek(fp, 0, SEEK_END);
+    long fsz = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    char *html_content = (char *)malloc(fsz + 1);
+    if (!html_content) {
+        fclose(fp);
+        jisp_fatal(doc, "web_load_html: out of memory");
+    }
+
+    if (fread(html_content, 1, fsz, fp) != (size_t)fsz) {
+        fclose(fp);
+        free(html_content);
+        jisp_fatal(doc, "web_load_html: failed to read file content");
+    }
+    html_content[fsz] = '\0';
+    fclose(fp);
+
+    yyjson_mut_val *root = get_root_fallible(doc, "web_load_html");
+    yyjson_mut_obj_add_strcpy(doc, root, "html_response", html_content);
+    free(html_content);
+}
+
+void web_create_server(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
+    yyjson_mut_val *port_val = yyjson_mut_arr_remove_last(stack);
+    if (!yyjson_is_num((yyjson_val *)port_val)) {
+        jisp_fatal(doc, "web_create_server: port must be a number");
+    }
+    int port = yyjson_get_int((yyjson_val *)port_val);
+
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        jisp_fatal(doc, "web_create_server: failed to create socket: %s", strerror(errno));
+    }
+
+    int opt = 1;
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        close(server_fd);
+        jisp_fatal(doc, "web_create_server: setsockopt failed: %s", strerror(errno));
+    }
+
+    struct sockaddr_in address;
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(port);
+
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+        close(server_fd);
+        jisp_fatal(doc, "web_create_server: bind failed for port %d: %s", port, strerror(errno));
+    }
+
+    if (listen(server_fd, 3) < 0) {
+        close(server_fd);
+        jisp_fatal(doc, "web_create_server: listen failed: %s", strerror(errno));
+    }
+
+    yyjson_mut_arr_add_int(doc, stack, server_fd);
+}
+
+void web_accept_loop(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
+    yyjson_mut_val *server_fd_val = yyjson_mut_arr_remove_last(stack);
+    if (!yyjson_is_num((yyjson_val *)server_fd_val)) {
+        jisp_fatal(doc, "web_accept_loop: server fd must be a number");
+    }
+    int server_fd = yyjson_get_int((yyjson_val *)server_fd_val);
+
+    yyjson_mut_val *root = get_root_fallible(doc, "web_accept_loop");
+    yyjson_mut_val *html_val = yyjson_mut_obj_get(root, "html_response");
+    if (!html_val || !yyjson_mut_is_str(html_val)) {
+        jisp_fatal(doc, "web_accept_loop: 'html_response' not found or not a string in root");
+    }
+    const char *html_content = yyjson_get_str((yyjson_val *)html_val);
+    size_t html_len = strlen(html_content);
+
+    // Prepare GET response
+    char *get_response_format = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s";
+    size_t get_response_size = snprintf(NULL, 0, get_response_format, html_len, html_content) + 1;
+    char *get_response = (char *)malloc(get_response_size);
+    if (!get_response) {
+        jisp_fatal(doc, "web_accept_loop: out of memory for get response");
+    }
+    snprintf(get_response, get_response_size, get_response_format, html_len, html_content);
+
+    struct sockaddr_in address;
+    int addrlen = sizeof(address);
+
+    printf("Server listening on port...\n");
+
+    while (1) {
+        int new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen);
+        if (new_socket < 0) {
+            fprintf(stderr, "accept failed: %s\n", strerror(errno));
+            continue;
+        }
+
+        char buffer[1024] = {0};
+        read(new_socket, buffer, 1024);
+
+        if (strncmp(buffer, "POST", 4) == 0) {
+            // Serialize the current JISP doc to a string
+            char *json_str = yyjson_mut_write_opts(doc, YYJSON_WRITE_PRETTY, NULL, NULL, NULL);
+            if (!json_str) {
+                const char *error_msg = "HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to serialize JISP state.";
+                send(new_socket, error_msg, strlen(error_msg), 0);
+                close(new_socket);
+                continue;
+            }
+
+            // Create an HTML page to display the JSON
+            const char *html_template = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>JISP State</title></head><body><pre>%s</pre></body></html>";
+            size_t html_body_size = snprintf(NULL, 0, html_template, json_str) + 1;
+            char *html_body = malloc(html_body_size);
+            snprintf(html_body, html_body_size, html_template, json_str);
+            free(json_str);
+
+            // Create the final HTTP response
+            char *post_response_format = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: %zu\r\n\r\n%s";
+            size_t post_response_size = snprintf(NULL, 0, post_response_format, strlen(html_body), html_body) + 1;
+            char *post_response = malloc(post_response_size);
+            snprintf(post_response, post_response_size, post_response_format, strlen(html_body), html_body);
+            free(html_body);
+
+            send(new_socket, post_response, strlen(post_response), 0);
+            free(post_response);
+        } else {
+            send(new_socket, get_response, strlen(get_response), 0);
+        }
+        close(new_socket);
+    }
+
+    free(get_response);
 }
 
 static void jisp_process_stream(FILE *fp, const char *filename) {
