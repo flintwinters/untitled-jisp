@@ -717,7 +717,13 @@ static void record_patch_with_real(yyjson_mut_doc *doc, const char *op, const ch
 }
 
 static void record_patch_add_val(yyjson_mut_doc *doc, const char *path, yyjson_mut_val *val) {
-    record_patch_with_val(doc, "add", path, val);
+    if (!doc || !path) return;
+    /* Optimize: stack appends don't need to store a value in residuals for undo. */
+    if (strcmp(path, "/stack/-") == 0) {
+        record_patch_with_val(doc, "add", path, NULL);
+    } else {
+        record_patch_with_val(doc, "add", path, val);
+    }
 }
 
 static void record_patch_replace_val(yyjson_mut_doc *doc, const char *path, yyjson_mut_val *val) {
@@ -725,7 +731,13 @@ static void record_patch_replace_val(yyjson_mut_doc *doc, const char *path, yyjs
 }
 
 static void record_patch_add_real(yyjson_mut_doc *doc, const char *path, double num) {
-    record_patch_with_real(doc, "add", path, num);
+    if (!doc || !path) return;
+    /* Optimize: stack appends don't need a value payload for undo. */
+    if (strcmp(path, "/stack/-") == 0) {
+        record_patch_with_val(doc, "add", path, NULL);
+    } else {
+        record_patch_with_real(doc, "add", path, num);
+    }
 }
 
 static void record_patch_replace_real(yyjson_mut_doc *doc, const char *path, double num) {
