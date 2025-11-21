@@ -7,7 +7,7 @@
         {
             "entrypoint": [10, 20, {".": "add_two_top"}],
             "stack": [],
-            "residual": [],
+            "residual": []
         },
         // Expected Result (Subset)
         {
@@ -21,7 +21,7 @@
         {
             "entrypoint": [10, 20, {".": "add_two_top"}],
             "stack": [],
-            "residual": [],
+            "residual": []
         },
         // Expected Result (Wrong)
         {
