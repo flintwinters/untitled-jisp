@@ -1361,7 +1361,8 @@ static void perform_undo(yyjson_mut_doc *doc) {
     }
     yyjson_mut_val *residual = yyjson_mut_obj_get(root, "residual");
     if (!residual || !yyjson_mut_is_arr(residual) || yyjson_mut_arr_size(residual) == 0) {
-        jisp_fatal(doc, "undo: 'residual' is missing or empty");
+        /* No residuals recorded; treat as no-op instead of fatal. */
+        return;
     }
 
     yyjson_mut_val *entry = yyjson_mut_arr_remove_last(residual);
