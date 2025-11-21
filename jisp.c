@@ -261,6 +261,7 @@ static void jisp_fatal(yyjson_mut_doc *doc, const char *fmt, ...) {
     print_c_stacktrace(buf);
 
     jisp_dump_state(doc);
+    fflush(NULL);
     exit(1);
 }
 
@@ -282,6 +283,7 @@ static void jisp_fatal_parse(yyjson_mut_doc *doc, const char *source_name, const
 
     jisp_report_pos(source_name, src, len, pos);
     jisp_dump_state(doc);
+    fflush(NULL);
     exit(1);
 }
 
@@ -335,7 +337,8 @@ void ptr_release_op(yyjson_mut_doc *doc);
 void ptr_get(yyjson_mut_doc *doc);
 void ptr_set(yyjson_mut_doc *doc);
 void print_json(yyjson_mut_doc *doc);
-void undo_last_residual(yyjson_mut_doc *doc);
+void undo_jisp_op(yyjson_mut_doc *doc);
+void step_jisp_op(yyjson_mut_doc *doc);
 
 /* Global JISP op registry (JSON document) */
 typedef enum jisp_op_id {
@@ -343,7 +346,7 @@ typedef enum jisp_op_id {
     JISP_OP_DUPLICATE_TOP = 2,
     JISP_OP_ADD_TWO_TOP = 3,
     JISP_OP_PRINT_JSON = 5,
-    JISP_OP_UNDO_LAST_RESIDUAL = 6,
+    JISP_OP_UNDO = 6,
     JISP_OP_MAP_OVER = 7,
     JISP_OP_GET = 8,
     JISP_OP_SET = 9,
@@ -357,7 +360,8 @@ typedef enum jisp_op_id {
     JISP_OP_TEST = 17,
     JISP_OP_PRINT_ERROR = 18,
     JISP_OP_LOAD = 19,
-    JISP_OP_STORE = 20
+    JISP_OP_STORE = 20,
+    JISP_OP_STEP = 21
 } jisp_op_id;
 
 void enter(yyjson_mut_doc *doc);
@@ -377,7 +381,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_DUPLICATE_TOP: return duplicate_top;
         case JISP_OP_ADD_TWO_TOP: return add_two_top;
         case JISP_OP_PRINT_JSON: return print_json;
-        case JISP_OP_UNDO_LAST_RESIDUAL: return undo_last_residual;
+        case JISP_OP_UNDO: return undo_jisp_op;
         case JISP_OP_MAP_OVER: return map_over;
         case JISP_OP_GET: return json_get;
         case JISP_OP_SET: return json_set;
@@ -392,6 +396,7 @@ static jisp_op jisp_op_from_id(int id) {
         case JISP_OP_PRINT_ERROR: return op_print_error;
         case JISP_OP_LOAD: return op_load;
         case JISP_OP_STORE: return op_store;
+        case JISP_OP_STEP: return step_jisp_op;
         default: return NULL;
     }
 }
@@ -405,7 +410,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "duplicate_top", JISP_OP_DUPLICATE_TOP);
     yyjson_mut_obj_add_int(d, root, "add_two_top", JISP_OP_ADD_TWO_TOP);
     yyjson_mut_obj_add_int(d, root, "print_json", JISP_OP_PRINT_JSON);
-    yyjson_mut_obj_add_int(d, root, "undo_last_residual", JISP_OP_UNDO_LAST_RESIDUAL);
+    yyjson_mut_obj_add_int(d, root, "undo", JISP_OP_UNDO);
     yyjson_mut_obj_add_int(d, root, "map_over", JISP_OP_MAP_OVER);
     yyjson_mut_obj_add_int(d, root, "get", JISP_OP_GET);
     yyjson_mut_obj_add_int(d, root, "set", JISP_OP_SET);
@@ -420,6 +425,7 @@ static void jisp_op_registry_init(void) {
     yyjson_mut_obj_add_int(d, root, "print_error", JISP_OP_PRINT_ERROR);
     yyjson_mut_obj_add_int(d, root, "load", JISP_OP_LOAD);
     yyjson_mut_obj_add_int(d, root, "store", JISP_OP_STORE);
+    yyjson_mut_obj_add_int(d, root, "step", JISP_OP_STEP);
     g_jisp_op_registry = d;
 }
 
@@ -1295,17 +1301,17 @@ static void undo_one_patch(yyjson_mut_doc *doc, yyjson_mut_val *patch) {
 
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     if (!root) {
-        jisp_fatal(doc, "undo_last_residual: missing root");
+        jisp_fatal(doc, "undo: missing root");
     }
 
     if (!yyjson_mut_is_obj(patch)) {
-        jisp_fatal(doc, "undo_last_residual: residual entry is not an object");
+        jisp_fatal(doc, "undo: residual entry is not an object");
     }
 
     yyjson_mut_val *opv = yyjson_mut_obj_get(patch, "op");
     yyjson_mut_val *pathv = yyjson_mut_obj_get(patch, "path");
     if (!opv || !pathv || !yyjson_mut_is_str(opv) || !yyjson_mut_is_str(pathv)) {
-        jisp_fatal(doc, "undo_last_residual: residual entry must have string 'op' and 'path'");
+        jisp_fatal(doc, "undo: residual entry must have string 'op' and 'path'");
     }
 
     const char *op = yyjson_get_str((yyjson_val *)opv);
@@ -1320,19 +1326,19 @@ static void undo_one_patch(yyjson_mut_doc *doc, yyjson_mut_val *patch) {
     /* replace is currently no-op in minimal mode */
 }
 
-void undo_last_residual(yyjson_mut_doc *doc) {
+static void perform_undo(yyjson_mut_doc *doc) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(doc);
     if (!root) {
-        jisp_fatal(doc, "undo_last_residual: missing root");
+        jisp_fatal(doc, "undo: missing root");
     }
     yyjson_mut_val *residual = yyjson_mut_obj_get(root, "residual");
     if (!residual || !yyjson_mut_is_arr(residual) || yyjson_mut_arr_size(residual) == 0) {
-        jisp_fatal(doc, "undo_last_residual: 'residual' is missing or empty");
+        jisp_fatal(doc, "undo: 'residual' is missing or empty");
     }
 
     yyjson_mut_val *entry = yyjson_mut_arr_remove_last(residual);
     if (!entry) {
-        jisp_fatal(doc, "undo_last_residual: failed to pop residual entry");
+        jisp_fatal(doc, "undo: failed to pop residual entry");
     }
 
     if (yyjson_mut_is_obj(entry)) {
@@ -1344,14 +1350,38 @@ void undo_last_residual(yyjson_mut_doc *doc) {
         while (yyjson_mut_arr_size(entry) > 0) {
             yyjson_mut_val *patch = yyjson_mut_arr_remove_last(entry);
             if (!patch || !yyjson_mut_is_obj(patch)) {
-                jisp_fatal(doc, "undo_last_residual: grouped residual contains non-object entry");
+                jisp_fatal(doc, "undo: grouped residual contains non-object entry");
             }
             undo_one_patch(doc, patch);
         }
         return;
     } else {
-        jisp_fatal(doc, "undo_last_residual: top residual entry must be an object or array of objects");
+        jisp_fatal(doc, "undo: top residual entry must be an object or array of objects");
     }
+}
+
+void undo_jisp_op(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
+
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *program = yyjson_mut_arr_remove_last(stack);
+
+    if (!program || !yyjson_mut_is_obj(program)) {
+        jisp_fatal(doc, "undo: top of stack must be a program object");
+    }
+
+    yyjson_mut_doc *sub_doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *sub_root = jisp_mut_deep_copy(sub_doc, program);
+    yyjson_mut_doc_set_root(sub_doc, sub_root);
+
+    perform_undo(sub_doc);
+
+    yyjson_mut_val *result = yyjson_mut_doc_get_root(sub_doc);
+    yyjson_mut_val *result_copy = jisp_mut_deep_copy(doc, result);
+    yyjson_mut_arr_append(stack, result_copy);
+    record_patch_add_val(doc, "/stack/-", result_copy);
+
+    yyjson_mut_doc_free(sub_doc);
 }
 
 
@@ -1637,7 +1667,7 @@ static void process_ep_object(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson
         yyjson_mut_arr_append(stack, jisp_mut_deep_copy(doc, elem));
         return;
     }
-
+		
     if (yyjson_mut_is_arr(dot)) {
         char nested_path[1024];
         snprintf(nested_path, sizeof(nested_path), "%s/%zu/.", path_prefix, idx);
@@ -1669,6 +1699,16 @@ static void process_ep_object(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson
     jisp_fatal(doc, "entrypoint object '.' field must be an array or string");
 }
 
+static void process_one_instruction(yyjson_mut_doc *doc, yyjson_mut_val *stack, yyjson_mut_val *elem, const char *path_prefix, size_t idx) {
+    if (yyjson_mut_is_obj(elem)) {
+        process_ep_object(doc, stack, elem, path_prefix, idx);
+    } else if (yyjson_mut_is_str(elem) || yyjson_is_num((yyjson_val *)elem) || yyjson_mut_is_arr(elem)) {
+        jisp_stack_push_copy_and_log(doc, stack, elem);
+    } else {
+        jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
+    }
+}
+
 /* process_ep_array: Interprets an entrypoint-like array of literals and directives; use for root entrypoint and nested '.' arrays. */
 static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char *path_prefix) {
     if (!doc || !ep) return;
@@ -1694,17 +1734,65 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
             break;
         }
         
-        if (yyjson_mut_is_obj(elem)) {
-            process_ep_object(doc, stack, elem, path_prefix, idx);
-        } else if (yyjson_mut_is_str(elem) || yyjson_is_num((yyjson_val *)elem) || yyjson_mut_is_arr(elem)) {
-            jisp_stack_push_copy_and_log(doc, stack, elem);
-        } else {
-            jisp_fatal(doc, "entrypoint element is not a string, number, array, or object");
-        }
+        process_one_instruction(doc, stack, elem, path_prefix, idx);
         idx++;
     }
     
     pop_call_stack(doc);
+}
+
+void step_jisp_op(yyjson_mut_doc *doc) {
+    yyjson_mut_val *stack = REQUIRE_STACK(doc, 1);
+
+    jisp_stack_log_remove_last(doc, stack);
+    yyjson_mut_val *program = yyjson_mut_arr_remove_last(stack);
+
+    if (!program || !yyjson_mut_is_obj(program)) {
+        jisp_fatal(doc, "step: top of stack must be a program object");
+    }
+
+    // Create isolated sub-document
+    yyjson_mut_doc *sub_doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *sub_root = jisp_mut_deep_copy(sub_doc, program);
+    yyjson_mut_doc_set_root(sub_doc, sub_root);
+    jpm_doc_retain(sub_doc);
+
+    // Get PC
+    yyjson_mut_val *pc_val = yyjson_mut_obj_get(sub_root, "pc");
+    int64_t pc = 0;
+    if (pc_val && yyjson_mut_is_int(pc_val)) {
+        pc = yyjson_mut_get_sint(pc_val);
+    } else {
+        yyjson_mut_obj_add_int(sub_doc, sub_root, "pc", 0);
+    }
+
+    // Get entrypoint
+    yyjson_mut_val *entrypoint = yyjson_mut_obj_get(sub_root, "entrypoint");
+    if (!entrypoint || !yyjson_mut_is_arr(entrypoint)) {
+        yyjson_mut_val *result = yyjson_mut_doc_get_root(sub_doc);
+        yyjson_mut_val *result_copy = jisp_mut_deep_copy(doc, result);
+        yyjson_mut_arr_append(stack, result_copy);
+        record_patch_add_val(doc, "/stack/-", result_copy);
+        jpm_doc_release(sub_doc);
+        return;
+    }
+
+    size_t ep_size = yyjson_mut_arr_size(entrypoint);
+    if (pc >= 0 && (size_t)pc < ep_size) {
+        yyjson_mut_val *instruction = yyjson_mut_arr_get(entrypoint, (size_t)pc);
+        
+        yyjson_mut_val *sub_stack = get_stack_fallible(sub_doc, "step");
+        process_one_instruction(sub_doc, sub_stack, instruction, "/entrypoint", (size_t)pc);
+
+        yyjson_mut_obj_add_val(sub_doc, sub_root, "pc", yyjson_mut_int(sub_doc, pc + 1));
+    }
+    
+    yyjson_mut_val *result = yyjson_mut_doc_get_root(sub_doc);
+    yyjson_mut_val *result_copy = jisp_mut_deep_copy(doc, result);
+    yyjson_mut_arr_append(stack, result_copy);
+    record_patch_add_val(doc, "/stack/-", result_copy);
+
+    jpm_doc_release(sub_doc);
 }
 
 /* process_entrypoint: Top-level driver for entrypoint arrays; use to seed the stack from initial program data and nested directives. */

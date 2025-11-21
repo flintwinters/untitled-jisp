@@ -2,13 +2,14 @@
     "stack": [],
     "entrypoint": [
         "--- Test Op Test Start ---",
-        {".": "print_json"},
 
         // Test Case 1: Success
         // Program
         {
             "entrypoint": [10, 20, {".": "add_two_top"}],
-            "stack": []
+            "stack": [],
+            "residual": [],
+            "pc": 0
         },
         // Expected Result (Subset)
         {
@@ -17,6 +18,79 @@
         {".": "test"},
         
         // Check if ERROR is on stack (should not be)
-        "Stack after success test (should be empty of ERROR):"
-   ]
+        "Stack after success test (should be empty of ERROR):",
+        // Test Case 2: Failure
+        // Program
+        {
+            "entrypoint": [10, 20, {".": "add_two_top"}],
+            "stack": [],
+            "residual": [],
+            "pc": 0
+        },
+        // Expected Result (Wrong)
+        {
+            "stack": [999]
+        },
+        {".": "test"},
+        
+        // Duplicate error to print it while keeping it on stack
+        {".": "duplicate_top"},
+        {".": "print_error"},
+
+         // Check if ERROR is on stack (should be)
+        "Stack after fail test (should have ERROR):",
+
+        "--- Test Op Test End ---",
+        
+        "--- Undo/Step Test Start ---",
+        // Program to be stepped and undone
+        {
+            "entrypoint": [1, 2, {".": "add_two_top"}],
+            "stack": [],
+            "is_reversible": true,
+            "residual": [],
+            "pc": 0
+        },
+
+        // Step 1: Push 1
+        {".": "step"},
+        {".": "duplicate_top"},
+        { "stack": [1], "pc": 1 },
+        {".": "test"},
+        
+        // Step 2: Push 2
+        {".": "step"},
+        {".": "duplicate_top"},
+        { "stack": [1, 2], "pc": 2 },
+        {".": "test"},
+        
+        // Step 3: Add
+        {".": "step"},
+        {".": "duplicate_top"},
+        { "stack": [3], "pc": 3 },
+        {".": "test"},
+
+        "--- Stepping forward done. Now undoing. ---",
+        
+        // Undo Step 3
+        {".": "undo"},
+        {".": "duplicate_top"},
+        { "stack": [1, 2] },
+        {".": "test"},
+
+        // Undo Step 2
+        {".": "undo"},
+        {".": "duplicate_top"},
+        { "stack": [1] },
+        {".": "test"},
+        
+        // Undo Step 1
+        {".": "undo"},
+        { "stack": [] },
+        {".": "test"},
+        
+        "--- Undo/Step Test End ---",
+
+        {".": "print_json"}
+    ]
 }
