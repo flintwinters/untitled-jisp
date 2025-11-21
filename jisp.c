@@ -621,6 +621,18 @@ static void ptr_stack_free_all(void) {
     }
 }
 
+/* Pointer stack scoping helpers to prevent leaked doc retains across frames. */
+static size_t ptr_stack_mark(void) {
+    return g_ptr_sp;
+}
+
+static void ptr_stack_release_to_mark(size_t mark) {
+    while (g_ptr_sp > mark) {
+        jpm_ptr p = g_ptr_stack[--g_ptr_sp];
+        jpm_ptr_release(&p);
+    }
+}
+
 /* No monadic combinators: pointers are raw handles with optional path metadata.
    Resolve explicitly with jpm_return(...) when needed. */
 
@@ -948,7 +960,7 @@ void add_two_top(yyjson_mut_doc *doc) {
     double val1 = (double)yyjson_mut_get_sint(val1_mut);
     double val2 = (double)yyjson_mut_get_sint(val2_mut);
     double sum = val1 + val2;
-    yyjson_mut_arr_add_int(doc, stack, sum);
+    yyjson_mut_arr_add_real(doc, stack, sum);
     residual_group_add_patch_with_real(doc, group, "add", "/stack/-", sum);
 
     if (group) residual_group_commit(doc, group);
@@ -1617,9 +1629,7 @@ void op_store(yyjson_mut_doc *doc) {
     yyjson_mut_val *val = yyjson_mut_arr_remove_last(stack);
     
     yyjson_write_err err;
-    bool ok = yyjson_mut_write_file(path, doc, YYJSON_WRITE_PRETTY, NULL, &err);
-    /* Legacy: write entire document, then write the selected value for compatibility. */
-    ok = yyjson_mut_val_write_file(path, val, YYJSON_WRITE_PRETTY, NULL, &err);
+    bool ok = yyjson_mut_val_write_file(path, val, YYJSON_WRITE_PRETTY, NULL, &err);
     
     if (!ok) {
         jisp_fatal(doc, "store: failed to write file '%s': %s", path, err.msg);
@@ -1754,6 +1764,7 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
         jisp_fatal(doc, "entrypoint must be an array");
     }
 
+    size_t __ptr_mark = ptr_stack_mark();
     push_call_stack(doc, path_prefix);
     
     yyjson_mut_val *stack = get_stack_fallible(doc, "process_entrypoint");
@@ -1761,7 +1772,8 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
     yyjson_mut_arr_iter it;
     yyjson_mut_val *elem;
     if (!yyjson_mut_arr_iter_init(ep, &it)) {
-        pop_call_stack(doc);        
+        ptr_stack_release_to_mark(__ptr_mark);
+        pop_call_stack(doc);
         return;
     }
 
@@ -1775,7 +1787,7 @@ static void process_ep_array(yyjson_mut_doc *doc, yyjson_mut_val *ep, const char
         process_one_instruction(doc, stack, elem, path_prefix, idx);
         idx++;
     }
-    
+    ptr_stack_release_to_mark(__ptr_mark);
     pop_call_stack(doc);
 }
 
