@@ -6,43 +6,72 @@
     <style>
         body {
             font-family: sans-serif;
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            margin: 10px;
+        }
+        h1 {
+            color: #d4d4d4;
+        }
+        p {
+            color: #d4d4d4;
+        }
+        button {
+            background-color: #333;
+            color: #d4d4d4;
+            border: 1px solid #555;
+            padding: 8px 15px;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        button:hover {
+            background-color: #555;
         }
         #json-renderer {
-            border: 1px solid #ccc;
-            padding: 10px;
-            margin-top: 20px;
-            white-space: pre;
+            border: 1px solid #3c3c3c;
+            padding: 5px;
+            margin-top: 10px;
+            white-space: pre-wrap; /* Allow long strings to wrap */
             font-family: monospace;
+            background-color: #252526;
+            color: #d4d4d4;
+            border-radius: 4px;
+        }
+        .json-object, .json-array {
+            padding-left: 15px;
+            border-left: 1px solid #444;
+            margin: 2px 0;
+            padding-top: 2px;
+            padding-bottom: 2px;
+            border-radius: 2px;
+            position: relative;
+        }
+        .button-container {
+            position: absolute;
+            top: 0;
+            left: -10px;
+            cursor: pointer;
+        }
+        .content {
+            margin-left: 10px;
         }
         .json-object {
-            padding-left: 20px;
-            border-left: 1px solid #eee;
-            background-color: #f8f8f8;
-            border-radius: 4px;
-            margin: 5px 0;
-            padding-top: 5px;
-            padding-bottom: 5px;
+            background-color: #2d2d30;
         }
         .json-array {
-            padding-left: 20px;
-            border-left: 1px solid #e0e0e0;
-            background-color: #f0f0f0;
-            border-radius: 4px;
-            margin: 5px 0;
-            padding-top: 5px;
-            padding-bottom: 5px;
+            background-color: #333337;
         }
         .json-key {
-            color: #a52a2a; /* brown */
+            color: #9cdcfe; /* light blue */
         }
         .json-string {
-            color: #008000; /* green */
+            color: #ce9178; /* light orange/brown */
         }
         .json-number {
-            color: #0000ff; /* blue */
+            color: #b5cea8; /* light green */
         }
         .json-boolean {
-            color: #ff00ff; /* magenta */
+            color: #569cd6; /* a different blue */
         }
         .json-null {
             color: #808080; /* gray */
@@ -53,6 +82,10 @@
         .collapser {
             cursor: pointer;
             margin-right: 5px;
+            color: #808080;
+        }
+        .collapser:hover {
+            color: #d4d4d4;
         }
     </style>
 </head>
@@ -143,18 +176,21 @@
                 const isArray = Array.isArray(data);
                 container.className = isArray ? 'json-array' : 'json-object';
 
-                const openingBracket = document.createElement('span');
-                const closingBracket = document.createElement('span');
+                const buttonContainer = document.createElement('div');
+                buttonContainer.className = 'button-container';
+
                 const collapser = document.createElement('span');
                 collapser.className = 'collapser';
+                collapser.textContent = '▼';
+                buttonContainer.appendChild(collapser);
+
+                container.appendChild(buttonContainer);
                 
                 const content = document.createElement('div');
-                
-                if (isArray) {
-                    collapser.textContent = '▼';
-                    container.appendChild(collapser);
-                    container.appendChild(content);
+                content.className = 'content';
+                container.appendChild(content);
 
+                if (isArray) {
                     data.forEach((value, index) => {
                         const item = document.createElement('div');
                         item.appendChild(createJsonVisualizer(value));
@@ -164,10 +200,6 @@
                         content.appendChild(item);
                     });
                 } else {
-                    collapser.textContent = '▼';
-                    container.appendChild(collapser);
-                    container.appendChild(content);
-                    
                     const keys = Object.keys(data);
                     keys.forEach((key, index) => {
                         const row = document.createElement('div');
@@ -187,7 +219,8 @@
                     });
                 }
                 
-                collapser.addEventListener('click', () => {
+                collapser.addEventListener('click', (e) => {
+                    e.stopPropagation();
                     content.classList.toggle('hidden');
                     collapser.textContent = content.classList.contains('hidden') ? '▶' : '▼';
                 });
