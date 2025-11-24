@@ -163,6 +163,14 @@ python3 build.py
   - Most reminiscent of the Aider AI coder.
   - The coder will automatically manage git commits and branches, and try to achieve a lot of the heavy listing with RAG/vectordb and finetuning specifically for jisp, rather than the bullshit guesswork a lot of agents currently do.
 
+- a vscode plugin to enable embedded syntax highlighting, as a superset of json syntax.
+  - `"sql_query": "sql SELECT * FROM table_name "` (note the `sql` after the quote, acting as a markdown codewell) would enable syntax highlighting for SQL within the string.
+  - Languages to add syntax support for: `python`, `shell`, `sqlite`, `markdown`, `json`, `c`.
+
+- expose LLVM C API as jisp ops, letting jisp code build IR.
+
+- expose raylib bindings to make games
+
 ### License
 
 I maintain the MIT license from the original yyjson project.
