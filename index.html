@@ -14,9 +14,23 @@
             white-space: pre;
             font-family: monospace;
         }
-        .json-object, .json-array {
+        .json-object {
             padding-left: 20px;
             border-left: 1px solid #eee;
+            background-color: #f8f8f8;
+            border-radius: 4px;
+            margin: 5px 0;
+            padding-top: 5px;
+            padding-bottom: 5px;
+        }
+        .json-array {
+            padding-left: 20px;
+            border-left: 1px solid #e0e0e0;
+            background-color: #f0f0f0;
+            border-radius: 4px;
+            margin: 5px 0;
+            padding-top: 5px;
+            padding-bottom: 5px;
         }
         .json-key {
             color: #a52a2a; /* brown */
@@ -137,11 +151,8 @@
                 const content = document.createElement('div');
                 
                 if (isArray) {
-                    openingBracket.textContent = '[';
-                    closingBracket.textContent = ']';
                     collapser.textContent = '▼';
                     container.appendChild(collapser);
-                    container.appendChild(openingBracket);
                     container.appendChild(content);
 
                     data.forEach((value, index) => {
@@ -153,11 +164,8 @@
                         content.appendChild(item);
                     });
                 } else {
-                    openingBracket.textContent = '{';
-                    closingBracket.textContent = '}';
                     collapser.textContent = '▼';
                     container.appendChild(collapser);
-                    container.appendChild(openingBracket);
                     container.appendChild(content);
                     
                     const keys = Object.keys(data);
@@ -166,7 +174,7 @@
                         
                         const keySpan = document.createElement('span');
                         keySpan.className = 'json-key';
-                        keySpan.textContent = `"${key}": `;
+                        keySpan.textContent = `${key}: `;
                         row.appendChild(keySpan);
                         
                         row.appendChild(createJsonVisualizer(data[key]));
@@ -179,8 +187,6 @@
                     });
                 }
                 
-                container.appendChild(closingBracket);
-
                 collapser.addEventListener('click', () => {
                     content.classList.toggle('hidden');
                     collapser.textContent = content.classList.contains('hidden') ? '▶' : '▼';
