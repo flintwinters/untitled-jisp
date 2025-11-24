@@ -1,4 +1,4 @@
-# JISP Technical Manual
+# Untitled JISP Language
 
 **Version:** 1.2  
 **Date:** November 19, 2025  
@@ -96,7 +96,7 @@ If an instruction is `{ ".": "name" }`:
 2.  **Macro Check:** Checks if `root["name"]` exists and is an array. If yes, executes that array as a subroutine.
 3.  **Fallback:** If neither, treats the object as a literal and pushes it to the stack.
 
-## 5. Residuals & Reversibility
+# 5. Residuals & Reversibility
 JISP supports "Time Travel Debugging" (Undo) via JSON Patch (RFC 6902).
 
 - **Activation:** Enabled if `root["is_reversible"]` is `true`.
@@ -152,9 +152,14 @@ python3 build.py
 ```
 
 ## 10. TODO:
+- improve compatibility with https://jqlang.org/ , advertise to current users.
+
 - improve reversibility/undo debugging robustness
 - improve web ui, add undo, redo, inputs, json editing etc.
 - add actually usable op codes, branching, conditionals, more math ops etc.
 - integrate AI tool calls so AI coding assistants can use the debugging system
-- custom AI coder, vector db + RAG of all functions with documentation descriptions
-- package manager
+- package manager for jisp
+- custom AI coder, vector db + RAG of all functions with documentation descriptions.
+  - Most reminiscent of the Aider AI coder.
+  - The coder will automatically manage git commits and branches, and try to achieve a lot of the heavy listing with RAG/vectordb and finetuning specifically for jisp, rather than the bullshit guesswork a lot of agents currently do.
+
