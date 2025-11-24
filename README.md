@@ -163,3 +163,8 @@ python3 build.py
   - Most reminiscent of the Aider AI coder.
   - The coder will automatically manage git commits and branches, and try to achieve a lot of the heavy listing with RAG/vectordb and finetuning specifically for jisp, rather than the bullshit guesswork a lot of agents currently do.
 
+### License
+
+I maintain the MIT license from the original yyjson project.
+
+I add GPL-2.0 for robust open source support.
