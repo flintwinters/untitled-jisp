@@ -1,0 +1,10 @@
+{
+    "stack": [],
+    "entrypoint": [
+        "index.html",
+        { ".": "web_load_html" },
+        27777,
+        { ".": "web_create_server" },
+        { ".": "web_accept_loop" }
+    ]
+}

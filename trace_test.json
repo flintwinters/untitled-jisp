@@ -1,8 +1,0 @@
-{
-    "stack": [],
-    "entrypoint": [
-        "--- Stack Trace Test ---",
-        {".": "print_json"},
-        {".": "pop_and_store"} // Should fail: stack empty
-    ]
-}
