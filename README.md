@@ -146,7 +146,15 @@ JISP depends on:
 - `libbfd` (binutils-dev) - For symbol resolution.
 - `libdl` - For dynamic linking support.
 
-To build:
+# To build:
 ```bash
 python3 build.py
 ```
+
+## 10. TODO:
+- improve reversibility/undo debugging robustness
+- improve web ui, add undo, redo, inputs, json editing etc.
+- add actually usable op codes, branching, conditionals, more math ops etc.
+- integrate AI tool calls so AI coding assistants can use the debugging system
+- custom AI coder, vector db + RAG of all functions with documentation descriptions
+- package manager
