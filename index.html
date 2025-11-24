@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>JISP Web Server</title>
+    <style>
+        body {
+            font-family: sans-serif;
+        }
+        #json-renderer {
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-top: 20px;
+            white-space: pre;
+            font-family: monospace;
+        }
+        .json-object, .json-array {
+            padding-left: 20px;
+            border-left: 1px solid #eee;
+        }
+        .json-key {
+            color: #a52a2a; /* brown */
+        }
+        .json-string {
+            color: #008000; /* green */
+        }
+        .json-number {
+            color: #0000ff; /* blue */
+        }
+        .json-boolean {
+            color: #ff00ff; /* magenta */
+        }
+        .json-null {
+            color: #808080; /* gray */
+        }
+        .hidden {
+            display: none;
+        }
+        .collapser {
+            cursor: pointer;
+            margin-right: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hello, World!</h1>
+    <p>Click the button to send a POST request.</p>
+    <form id="post-form" method="POST" action="/">
+        <button type="submit">Send POST Request</button>
+    </form>
+    <div id="json-renderer"></div>
+
+    <script>
+        document.getElementById('post-form').addEventListener('submit', function(event) {
+            event.preventDefault();
+            
+            fetch('/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ request: "state" }) 
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                // The server sends back a JSON document embedded in an HTML page
+                // We need to extract it. A simple way is to get the text content.
+                return response.text();
+            })
+            .then(html => {
+                const renderer = document.getElementById('json-renderer');
+                renderer.innerHTML = '';
+                try {
+                    // Try to find JSON within the <pre> tag like in j.html
+                    const pre_content = html.match(/<pre>([\s\S]*)<\/pre>/);
+                    if(pre_content && pre_content[1]){
+                        const json = JSON.parse(pre_content[1]);
+                        const visualizer = createJsonVisualizer(json);
+                        renderer.appendChild(visualizer);
+                    } else {
+                        // Fallback for non-json or different html structure
+                        renderer.textContent = "Could not find JSON in the response.";
+                    }
+                } catch (e) {
+                    console.error('Error parsing JSON:', e);
+                    const renderer = document.getElementById('json-renderer');
+                    renderer.textContent = 'Error parsing JSON from response.';
+                }
+            })
+            .catch(error => {
+                console.error('There has been a problem with your fetch operation:', error);
+                const renderer = document.getElementById('json-renderer');
+                renderer.textContent = 'Error fetching data.';
+            });
+        });
+
+        function createJsonVisualizer(data) {
+            if (data === null) {
+                const element = document.createElement('span');
+                element.className = 'json-null';
+                element.textContent = 'null';
+                return element;
+            }
+
+            const type = typeof data;
+            if (type === 'string') {
+                const element = document.createElement('span');
+                element.className = 'json-string';
+                element.textContent = `"${data}"`;
+                return element;
+            }
+            if (type === 'number') {
+                const element = document.createElement('span');
+                element.className = 'json-number';
+                element.textContent = data;
+                return element;
+            }
+            if (type === 'boolean') {
+                const element = document.createElement('span');
+                element.className = 'json-boolean';
+                element.textContent = data;
+                return element;
+            }
+
+            if (type === 'object') {
+                const container = document.createElement('div');
+                const isArray = Array.isArray(data);
+                container.className = isArray ? 'json-array' : 'json-object';
+
+                const openingBracket = document.createElement('span');
+                const closingBracket = document.createElement('span');
+                const collapser = document.createElement('span');
+                collapser.className = 'collapser';
+                
+                const content = document.createElement('div');
+                
+                if (isArray) {
+                    openingBracket.textContent = '[';
+                    closingBracket.textContent = ']';
+                    collapser.textContent = '▼';
+                    container.appendChild(collapser);
+                    container.appendChild(openingBracket);
+                    container.appendChild(content);
+
+                    data.forEach((value, index) => {
+                        const item = document.createElement('div');
+                        item.appendChild(createJsonVisualizer(value));
+                        if(index < data.length -1) {
+                            item.append(',');
+                        }
+                        content.appendChild(item);
+                    });
+                } else {
+                    openingBracket.textContent = '{';
+                    closingBracket.textContent = '}';
+                    collapser.textContent = '▼';
+                    container.appendChild(collapser);
+                    container.appendChild(openingBracket);
+                    container.appendChild(content);
+                    
+                    const keys = Object.keys(data);
+                    keys.forEach((key, index) => {
+                        const row = document.createElement('div');
+                        
+                        const keySpan = document.createElement('span');
+                        keySpan.className = 'json-key';
+                        keySpan.textContent = `"${key}": `;
+                        row.appendChild(keySpan);
+                        
+                        row.appendChild(createJsonVisualizer(data[key]));
+
+                        if(index < keys.length - 1) {
+                           row.append(',');
+                        }
+
+                        content.appendChild(row);
+                    });
+                }
+                
+                container.appendChild(closingBracket);
+
+                collapser.addEventListener('click', () => {
+                    content.classList.toggle('hidden');
+                    collapser.textContent = content.classList.contains('hidden') ? '▶' : '▼';
+                });
+
+                return container;
+            }
+
+            const element = document.createElement('span');
+            element.textContent = data.toString();
+            return element;
+        }
+    </script>
+</body>
+</html>
