@@ -6,86 +6,91 @@
     <style>
         body {
             font-family: sans-serif;
-            background-color: #1e1e1e;
-            color: #d4d4d4;
+            background-color: #1d2021;
+            color: #fbf1c7;
             margin: 10px;
         }
         h1 {
-            color: #d4d4d4;
+            color: #fbf1c7;
         }
         p {
-            color: #d4d4d4;
+            color: #fbf1c7;
         }
         button {
-            background-color: #333;
-            color: #d4d4d4;
-            border: 1px solid #555;
+            background-color: #3c3836;
+            color: #fbf1c7;
+            border: 1px solid #504945;
             padding: 8px 15px;
             cursor: pointer;
             border-radius: 3px;
         }
         button:hover {
-            background-color: #555;
+            background-color: #504945;
         }
         #json-renderer {
-            border: 1px solid #3c3c3c;
+            border: 1px solid #504945;
             padding: 5px;
             margin-top: 10px;
-            white-space: pre-wrap; /* Allow long strings to wrap */
+            white-space: pre-wrap;
             font-family: monospace;
-            background-color: #252526;
-            color: #d4d4d4;
+            background-color: #1d2021;
+            color: #fbf1c7;
             border-radius: 4px;
         }
         .json-object, .json-array {
-            padding-left: 15px;
-            border-left: 1px solid #444;
-            margin: 2px 0;
+            padding-left: 8px;
             padding-top: 2px;
-            padding-bottom: 2px;
-            border-radius: 2px;
+            border-radius: 4px;
             position: relative;
         }
-        .button-container {
-            position: absolute;
-            top: 0;
-            left: -10px;
+        .collapser {
+            font-weight: bold;
+            user-select: none;
+            padding: 0 4px; /* Reduced padding */
+            color: #bdae93;
             cursor: pointer;
+            font-size: 12px; /* Reduced font size */
+            line-height: 1; /* Ensure minimal line height */
+            display: inline-block; /* Allow padding and sizing */
+            width: 1em; /* Fixed width to prevent shifting */
+            text-align: center;
+        }
+        .collapser:hover {
+            color: #fbf1c7;
         }
         .content {
-            margin-left: 10px;
+            margin-left: 4px;
         }
         .json-object {
-            background-color: #2d2d30;
+            background-color: #282828;
+            padding: 4px;
         }
         .json-array {
-            background-color: #333337;
+            border-left: 3px solid gray;
+            background-color: #444;
+            padding: 8px;
         }
         .json-key {
-            color: #9cdcfe; /* light blue */
+            color: #8ec07c;
+            margin-right: 4px;
+            background-color: #3c3836;
+            padding: 2px 4px;
+            border-radius: 3px;
         }
         .json-string {
-            color: #ce9178; /* light orange/brown */
+            color: #fabd2f;
         }
         .json-number {
-            color: #b5cea8; /* light green */
+            color: #fe8019;
         }
         .json-boolean {
-            color: #569cd6; /* a different blue */
+            color: #d3869b;
         }
         .json-null {
-            color: #808080; /* gray */
+            color: #a89984;
         }
         .hidden {
             display: none;
-        }
-        .collapser {
-            cursor: pointer;
-            margin-right: 5px;
-            color: #808080;
-        }
-        .collapser:hover {
-            color: #d4d4d4;
         }
     </style>
 </head>
@@ -100,46 +105,34 @@
     <script>
         document.getElementById('post-form').addEventListener('submit', function(event) {
             event.preventDefault();
-            
             fetch('/', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ request: "state" }) 
+                body: JSON.stringify({ request: "state" })
             })
-            .then(response => {
-                if (!response.ok) {
-                    throw new Error('Network response was not ok');
-                }
-                // The server sends back a JSON document embedded in an HTML page
-                // We need to extract it. A simple way is to get the text content.
-                return response.text();
-            })
+            .then(response => response.text())
             .then(html => {
                 const renderer = document.getElementById('json-renderer');
                 renderer.innerHTML = '';
                 try {
-                    // Try to find JSON within the <pre> tag like in j.html
                     const pre_content = html.match(/<pre>([\s\S]*)<\/pre>/);
-                    if(pre_content && pre_content[1]){
+                    if (pre_content && pre_content[1]) {
                         const json = JSON.parse(pre_content[1]);
                         const visualizer = createJsonVisualizer(json);
                         renderer.appendChild(visualizer);
                     } else {
-                        // Fallback for non-json or different html structure
                         renderer.textContent = "Could not find JSON in the response.";
                     }
                 } catch (e) {
                     console.error('Error parsing JSON:', e);
-                    const renderer = document.getElementById('json-renderer');
                     renderer.textContent = 'Error parsing JSON from response.';
                 }
             })
             .catch(error => {
                 console.error('There has been a problem with your fetch operation:', error);
-                const renderer = document.getElementById('json-renderer');
-                renderer.textContent = 'Error fetching data.';
+                document.getElementById('json-renderer').textContent = 'Error fetching data.';
             });
         });
 
@@ -155,7 +148,7 @@
             if (type === 'string') {
                 const element = document.createElement('span');
                 element.className = 'json-string';
-                element.textContent = `"${data}"`;
+                element.textContent = '"' + data + '"';
                 return element;
             }
             if (type === 'number') {
@@ -172,59 +165,119 @@
             }
 
             if (type === 'object') {
-                const container = document.createElement('div');
                 const isArray = Array.isArray(data);
+                const container = document.createElement('div');
                 container.className = isArray ? 'json-array' : 'json-object';
 
-                const buttonContainer = document.createElement('div');
-                buttonContainer.className = 'button-container';
-
-                const collapser = document.createElement('span');
-                collapser.className = 'collapser';
-                collapser.textContent = '▼';
-                buttonContainer.appendChild(collapser);
-
-                container.appendChild(buttonContainer);
-                
-                const content = document.createElement('div');
-                content.className = 'content';
-                container.appendChild(content);
-
                 if (isArray) {
-                    data.forEach((value, index) => {
-                        const item = document.createElement('div');
-                        item.appendChild(createJsonVisualizer(value));
-                        if(index < data.length -1) {
-                            item.append(',');
+                    const header = document.createElement('div');
+                    header.style.display = 'flex';
+                    header.style.alignItems = 'baseline';
+                    container.appendChild(header);
+
+                    const content = document.createElement('div');
+                    content.className = 'content';
+                    container.appendChild(content);
+
+                    let shouldShowCollapser = true;
+                    let singleChildIsPrimitive = false;
+                    if (data.length === 1) {
+                        const value = data[0];
+                        const valueType = typeof value;
+                        if (value === null || valueType === 'string' || valueType === 'number' || valueType === 'boolean') {
+                            singleChildIsPrimitive = true;
                         }
-                        content.appendChild(item);
-                    });
-                } else {
+                    }
+                    if (data.length <= 1 && singleChildIsPrimitive) {
+                        shouldShowCollapser = false;
+                    }
+
+
+                    if (shouldShowCollapser) {
+                        const collapser = document.createElement('span');
+                        collapser.className = 'collapser';
+                        collapser.textContent = '–';
+                        header.appendChild(collapser);
+
+                        const summary = document.createElement('span');
+                        summary.style.display = 'none';
+                        summary.style.color = '#a89984';
+                        summary.textContent = `[${data.length} items]`;
+                        header.appendChild(summary);
+
+                        collapser.addEventListener('click', (e) => {
+                            e.stopPropagation();
+                            content.classList.toggle('hidden');
+                            summary.style.display = content.classList.contains('hidden') ? 'inline' : 'none';
+                            collapser.textContent = content.classList.contains('hidden') ? '+' : '–';
+                        });
+                    }
+
+                    if (data.length === 0) {
+                        header.appendChild(document.createTextNode('[]'));
+                    } else {
+                         data.forEach(value => {
+                            const item = document.createElement('div');
+                            item.appendChild(createJsonVisualizer(value));
+                            content.appendChild(item);
+                        });
+                    }
+                } else { // Is an object
                     const keys = Object.keys(data);
-                    keys.forEach((key, index) => {
+                    if (keys.length === 0) {
+                        container.textContent = '{}';
+                        return container;
+                    }
+
+                    keys.forEach(key => {
                         const row = document.createElement('div');
-                        
+                        row.style.display = 'flex';
+                        row.style.alignItems = 'baseline';
+
+                        const keyContainer = document.createElement('div');
                         const keySpan = document.createElement('span');
                         keySpan.className = 'json-key';
-                        keySpan.textContent = `${key}: `;
-                        row.appendChild(keySpan);
-                        
-                        row.appendChild(createJsonVisualizer(data[key]));
+                        keySpan.textContent = key;
+                        keyContainer.appendChild(keySpan);
+                        row.appendChild(keyContainer);
 
-                        if(index < keys.length - 1) {
-                           row.append(',');
+                        const valueContainer = document.createElement('div');
+                        const valueElem = createJsonVisualizer(data[key]);
+                        valueContainer.appendChild(valueElem);
+                        row.appendChild(valueContainer);
+
+                        container.appendChild(row);
+
+                        const isCollapsible = valueElem.classList.contains('json-object') || valueElem.classList.contains('json-array');
+                        if (isCollapsible) {
+                            keySpan.style.cursor = 'pointer';
+
+                            keySpan.addEventListener('click', (e) => {
+                                e.stopPropagation();
+
+                                if (valueElem.classList.contains('json-object')) {
+                                    Array.from(valueElem.children).forEach(child => child.classList.toggle('hidden'));
+                                } else { // json-array
+                                    const content = valueElem.querySelector('.content');
+                                    if(content) {
+                                        content.classList.toggle('hidden');
+
+                                        const collapser = valueElem.querySelector('.collapser');
+                                        const summary = valueElem.querySelector('span[style*="color"]');
+
+                                        if (content.classList.contains('hidden')) {
+                                             if (collapser) collapser.textContent = '+';
+                                             if (summary) summary.style.display = 'inline';
+                                        } else {
+                                             if (collapser) collapser.textContent = '–';
+                                             if (summary) summary.style.display = 'none';
+                                        }
+                                    }
+                                }
+                            });
                         }
-
-                        content.appendChild(row);
                     });
                 }
-                
-                collapser.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    content.classList.toggle('hidden');
-                    collapser.textContent = content.classList.contains('hidden') ? '▶' : '▼';
-                });
-
                 return container;
             }
 
