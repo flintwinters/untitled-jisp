@@ -4,6 +4,10 @@
 **Date:** November 19, 2025  
 **Context:** Embedded C JSON Runtime
 
+## 0. Community
+
+Mushroom Software: [https://discord.gg/J5ewqscARy](https://discord.gg/J5ewqscARy)
+
 ## 1. Overview
 JISP (JSON Instruction Stream Processor) is a stack-based virtual machine embedded within a single JSON document. It executes operations defined in the document to transform the document itself. It is built on top of the high-performance `yyjson` C library.
 
