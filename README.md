@@ -1,6 +1,6 @@
 # Untitled JISP Language
 
-**Version:** 1.2  
+**Version:** 0.2  
 **Date:** November 19, 2025  
 **Context:** Embedded C JSON Runtime
 
